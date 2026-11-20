@@ -91,8 +91,6 @@ fun DiagnosticsTab() {
     var lastScanTime by remember { mutableStateOf<Long?>(null) }
     var scanError by remember { mutableStateOf<String?>(null) }
 
-    var confirmClearEcu by remember { mutableStateOf<String?>(null) }
-    var showConfirmClearAll by remember { mutableStateOf(false) }
     var showDevToolsDialog by remember { mutableStateOf(false) }
 
     val totalDtcs = reports.sumOf { it.dtcs.size }
@@ -272,26 +270,14 @@ fun DiagnosticsTab() {
             }
         }
 
-        // Per-ECU Fault Code Results
+        // Per-ECU Fault Code Results (Read-Only UDS 0x19)
         if (reports.isNotEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Steuergeräte (${reports.size})",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = EvColors.TextPrimary
-                )
-                if (totalDtcs > 0) {
-                    OutlinedButton(onClick = { showConfirmClearAll = true }) {
-                        Icon(Icons.Rounded.Delete, contentDescription = null, tint = EvColors.Red, modifier = Modifier.size(16.dp))
-                        Text(" Alle löschen", color = EvColors.Red, fontSize = 12.sp)
-                    }
-                }
-            }
+            Text(
+                text = "Steuergeräte (${reports.size}) • Nur Lesen (Read-Only)",
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = EvColors.TextPrimary
+            )
 
             reports.forEach { report ->
                 val ecuColor = when {
@@ -341,11 +327,6 @@ fun DiagnosticsTab() {
                                         fontSize = 11.sp,
                                         color = ecuColor
                                     )
-                                }
-                            }
-                            if (report.dtcs.isNotEmpty()) {
-                                TextButton(onClick = { confirmClearEcu = report.ecuKey }) {
-                                    Text("Löschen", color = EvColors.Red, fontSize = 12.sp)
                                 }
                             }
                         }
@@ -453,48 +434,6 @@ fun DiagnosticsTab() {
             Text("Entwickler-Tools (Raw-OBD-Log & AT/UDS-Konsole)", fontSize = 12.sp)
         }
         }
-    }
-
-    // Confirm Clear Single ECU
-    confirmClearEcu?.let { ecuKey ->
-        AlertDialog(
-            onDismissRequest = { confirmClearEcu = null },
-            title = { Text("Fehlerspeicher löschen ($ecuKey)?") },
-            text = { Text("Sendet UDS Service 0x14 (ClearDiagnosticInformation) an Steuergerät $ecuKey.") },
-            confirmButton = {
-                Button(onClick = {
-                    confirmClearEcu = null
-                    scope.launch {
-                        CorsaDashRuntime.clearDtcs(ecuKey)
-                        runFullScan()
-                    }
-                }) { Text("Löschen") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearEcu = null }) { Text("Abbrechen") }
-            }
-        )
-    }
-
-    // Confirm Clear All ECUs
-    if (showConfirmClearAll) {
-        AlertDialog(
-            onDismissRequest = { showConfirmClearAll = false },
-            title = { Text("Alle Fehlerspeicher löschen?") },
-            text = { Text("Sendet UDS Service 0x14 an BMS, VCU und OBC und führt anschließend einen neuen Scan durch.") },
-            confirmButton = {
-                Button(onClick = {
-                    showConfirmClearAll = false
-                    scope.launch {
-                        CorsaDashRuntime.clearDtcs(null)
-                        runFullScan()
-                    }
-                }) { Text("Alle löschen") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirmClearAll = false }) { Text("Abbrechen") }
-            }
-        )
     }
 
     // Hidden Developer Tools Dialog (Raw Log + AT/UDS Console)
