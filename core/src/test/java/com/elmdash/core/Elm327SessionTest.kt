@@ -88,10 +88,13 @@ class Elm327SessionTest {
         val transport = FakeObdTransport { "OK\r\r>" }
         val session = Elm327Session(transport)
 
-        session.selectEcu("764", "76C")
-        session.selectEcu("764", "76C") // duplicate -> should not resend
-        session.selectEcu("760", "768")
+        session.selectEcu("6B4", "694")
+        session.selectEcu("6B4", "694") // duplicate -> should not resend
+        session.selectEcu("6A2", "682")
 
-        assertEquals(listOf("ATSH764", "ATCRA76C", "ATSH760", "ATCRA768"), transport.sentCommands)
+        assertEquals(
+            listOf("ATSH6B4", "ATFCSH6B4", "ATCRA694", "ATSH6A2", "ATFCSH6A2", "ATCRA682"),
+            transport.sentCommands
+        )
     }
 }

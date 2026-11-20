@@ -117,10 +117,17 @@ class TripTracker(private val context: Context) {
      * and returns virtual PID values for the primary trip + instant EV metrics.
      */
     fun onTelemetryTick(values: Map<String, Double>, nowMs: Long = System.currentTimeMillis()): Map<String, Double> {
-        val powerKw = values["hv_power"]
+        val hvVoltage = values["hv_voltage"]
+        val hvCurrent = values["hv_current"]
+        val powerKw = values["hv_power"] ?: if (hvVoltage != null && hvCurrent != null) {
+            (hvVoltage * hvCurrent) / 1000.0
+        } else {
+            null
+        }
         val speedKmh = values["speed"]
         val soc = values["soc"]
         val soh = values["soh"] ?: 95.0
+        val availableEnergyKwh = values["available_energy"]
         val odometerKm = values["odometer"]
         val cellMin = values["cell_voltage_min"]
         val cellMax = values["cell_voltage_max"]
@@ -192,7 +199,22 @@ class TripTracker(private val context: Context) {
         val primary = updatedList.firstOrNull { it.isPrimary } ?: updatedList.firstOrNull()
         val secondary = updatedList.firstOrNull { it.id != primary?.id }
 
-        val computed = HashMap<String, Double>(12)
+        val computed = HashMap<String, Double>(16)
+
+        if (powerKw != null) {
+            if ("hv_power" !in values) {
+                computed[PID_HV_POWER] = powerKw
+            }
+            if ("charge_power" !in values) {
+                computed[PID_CHARGE_POWER] = if (powerKw < -0.2) -powerKw else 0.0
+            }
+        }
+
+        val auxV = values["aux_12v_voltage"]
+        val auxA = values["aux_12v_current"]
+        if ("dcdc_power" !in values && auxV != null && auxA != null) {
+            computed[PID_DCDC_POWER] = (auxV * auxA) / 1000.0
+        }
 
         if (powerKw != null && speedKmh != null) {
             computed[PID_INST_CONSUMPTION] = if (speedKmh >= 3.0) {
@@ -216,9 +238,8 @@ class TripTracker(private val context: Context) {
             computed[PID_LAST_TRIP_KM] = secondary.recordedDistanceKm
         }
 
-        if (soc != null) {
-            val usablePackKwh = 46.3 * (soh / 100.0)
-            val remainingKwh = usablePackKwh * (soc / 100.0)
+        val remainingKwh = availableEnergyKwh ?: soc?.let { 46.3 * (soh / 100.0) * (it / 100.0) }
+        if (remainingKwh != null) {
             val effCons = if (primary != null && primary.recordedDistanceKm >= 0.5 && primary.consumptionKwhPer100Km in 8.0..38.0) {
                 primary.consumptionKwhPer100Km
             } else {
@@ -231,13 +252,13 @@ class TripTracker(private val context: Context) {
             computed[PID_CELL_DELTA_MV] = ((cellMax - cellMin) * 1000.0).coerceAtLeast(0.0)
         }
 
-        val invKw = values["inverter_power"]
+        val refInputKw = values["inverter_power"] ?: powerKw
         val motKw = values["motor_power"]
         if (powerKw != null && motKw != null) {
             computed[PID_POWER_LOSSES] = (powerKw - motKw).coerceIn(-20.0, 25.0)
         }
-        if (invKw != null && motKw != null && kotlin.math.abs(invKw) >= 1.5) {
-            val eff = if (invKw > 0) (motKw / invKw * 100.0) else (invKw / motKw * 100.0)
+        if (refInputKw != null && motKw != null && kotlin.math.abs(refInputKw) >= 1.5) {
+            val eff = if (refInputKw > 0) (motKw / refInputKw * 100.0) else (refInputKw / motKw * 100.0)
             computed[PID_DRIVETRAIN_EFF] = eff.coerceIn(0.0, 100.0)
         }
 
@@ -310,6 +331,9 @@ class TripTracker(private val context: Context) {
     companion object {
         private val KEY_TRIPS_JSON = stringPreferencesKey("tracked_trips_v2_json")
 
+        const val PID_HV_POWER = "hv_power"
+        const val PID_CHARGE_POWER = "charge_power"
+        const val PID_DCDC_POWER = "dcdc_power"
         const val PID_INST_CONSUMPTION = "inst_consumption"
         const val PID_TRIP_CONSUMPTION = "trip_consumption"
         const val PID_TRIP_DISTANCE = "trip_distance"
@@ -325,6 +349,9 @@ class TripTracker(private val context: Context) {
         const val PID_POWER_LOSSES = "power_losses"
 
         val VIRTUAL_PID_META: List<Triple<String, String, String>> = listOf(
+            Triple(PID_HV_POWER, "Leistung BMS (V × A)", "kW"),
+            Triple(PID_CHARGE_POWER, "Ladeleistung (BMS)", "kW"),
+            Triple(PID_DCDC_POWER, "DC-DC 12V Leistung", "kW"),
             Triple(PID_INST_CONSUMPTION, "Momentanverbrauch", "kWh/100km"),
             Triple(PID_TRIP_CONSUMPTION, "Trip Ø Verbrauch", "kWh/100km"),
             Triple(PID_TRIP_DISTANCE, "Trip Distanz", "km"),

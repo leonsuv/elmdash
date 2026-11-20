@@ -91,6 +91,9 @@ class Elm327Session(
 
         if (activeTxHeader != normTx) {
             sendCommandLocked("ATSH$normTx", timeoutMs = 800L)
+            // Stellantis e-CMP uses non-standard RX IDs (e.g. 6B4->694, 6A2->682),
+            // so ISO-TP multi-frame flow control must explicitly target the active TX header.
+            sendCommandLocked("ATFCSH$normTx", timeoutMs = 800L)
             activeTxHeader = normTx
         }
         if (activeRxHeader != normRx) {
@@ -169,14 +172,16 @@ class Elm327Session(
 
     companion object {
         val INIT_COMMANDS = listOf(
-            "ATE0",   // Echo off
-            "ATL0",   // Linefeeds off
-            "ATS0",   // Spaces off (max throughput)
-            "ATSP6",  // ISO 15765-4 CAN (11-bit, 500 kbaud)
-            "ATCAF1", // CAN auto formatting on
-            "ATCFC1", // CAN flow control on (required for ISO-TP multi-frame)
-            "ATAT2",  // Aggressive adaptive timing
-            "ATST0A"  // Short timeout (10 * 4ms = 40ms)
+            "ATE0",         // Echo off
+            "ATL0",         // Linefeeds off
+            "ATS0",         // Spaces off (max throughput)
+            "ATSP6",        // ISO 15765-4 CAN (11-bit, 500 kbaud)
+            "ATCAF1",       // CAN auto formatting on
+            "ATCFC1",       // CAN flow control on (required for ISO-TP multi-frame)
+            "ATFCSD300000", // Flow Control Data: CTS, BS=0, STmin=0 (e-CMP non-standard RX IDs)
+            "ATFCSM1",      // Flow Control Mode: user-defined header & data
+            "ATAT2",        // Aggressive adaptive timing
+            "ATST0A"        // Short timeout (10 * 4ms = 40ms)
         )
     }
 }

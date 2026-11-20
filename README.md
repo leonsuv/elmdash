@@ -38,11 +38,11 @@
   - Tap to configure, drag-and-drop to reposition on the 12×6 grid, and horizontal fullscreen preview (`16:9` fit-height).
   - Multiple customizable tabs (`Fahren`, `Laden`, `Akku`, plus custom tabs), optional **Endless Scroll** ribbon in Android Auto, and **My Dashboards / My Cards** template library.
   - Instant live hot-reload from Phone Companion App to Android Auto.
-- **52 Telemetry Channels (39 UDS PIDs + 13 Computed EV Metrics):**
-  - Covers 5 Stellantis e-CMP ECUs (`BMS 0x764`, `MCU/Inverter 0x762`, `VCU 0x760`, `OBC/DC-DC 0x765`, `HVAC 0x767`): HV BMS/Inverter/Motor kW, torque, RPM, SoC, SoH, 108s2p cell voltages (ISO-TP multi-frame), battery/inverter/motor/coolant temperatures, 12V aux voltage/current, AC/DC charging power, HVAC/PTC heater draw, drivetrain efficiency, and power losses.
+- **53 Telemetry Channels (37 Verified UDS PIDs + 16 Computed EV Metrics):**
+  - Covers 4 Stellantis e-CMP ECUs (`BMS 0x6B4→0x694`, `VCU 0x6A2→0x682`, `MCU/Inverter 0x6A6→0x686`, `OBC/DC-DC 0x590→0x58F`): HV voltage/current/power (kW BMS = V×A), E-Motor kW/torque/RPM, SoC (calibrated & raw), SoH, available energy (kWh), 108s2p cell voltages (ISO-TP multi-frame `22 D440`), battery/inverter/motor/DC-DC/OBC/coolant temperatures, 12V aux voltage & DC-DC current/power, AC grid voltage, charge/discharge 10s power limits, HV isolation resistance, lifetime kWh charged/discharged, drivetrain efficiency, and power losses.
   - Single Source of Truth catalog in [`docs/corsa_e_pids.json`](docs/corsa_e_pids.json) (shared by both the Android app and the Python ELM327 simulator).
 - **High-Throughput ELM327 v2.3 Engine:**
-  - Fast-Wake (`\r` / `ATI` before `ATZ`), Corsa-e CAN init (`ATE0`, `ATL0`, `ATS0`, `ATSP6`, `ATCAF1`, `ATCFC1`, `ATAT2`, `ATST0A`), ECU header grouping, expected-frame-count hints, and tiered polling (`FAST` / `MEDIUM` / `SLOW`).
+  - Fast-Wake (`\r` / `ATI` before `ATZ`), Corsa-e CAN init (`ATE0`, `ATL0`, `ATS0`, `ATSP6`, `ATCAF1`, `ATCFC1`, `ATFCSD300000`, `ATFCSM1`, `ATAT2`, `ATST0A`), per-ECU `ATSH`/`ATFCSH`/`ATCRA` switching (required for Stellantis e-CMP's non-standard RX IDs like `6B4→694`), expected-frame-count hints, and tiered polling (`FAST` / `MEDIUM` / `SLOW`).
   - Dual-mode Bluetooth support for **Vgate iCar Pro 2S** (**BLE GATT** `18F0 / 2AF0 / 2AF1` + MTU negotiation & **Classic SPP/RFCOMM**), plus **TCP** transport for local simulator testing.
 - **Always-Running Concurrent Trips:** Unlimited parallel trips with automatic persistence, real consumption (`kWh/100 km`), recuperation %, estimated real-world range, and automatic **odometer data-gap detection**.
 - **Multi-ECU UDS Diagnostics:** Vehicle Health Score (0–100%), UDS `0x19 02 FF` DTC scanning & `0x14 FF FF FF` clearing across ECUs, plus hidden Developer Tools (Raw-OBD-Log & interactive AT/UDS console).
@@ -50,9 +50,21 @@
 
 ---
 
-## ⚠️ Important Notice on PIDs (`docs/corsa_e_pids.json`)
+## Verified Stellantis e-CMP PIDs (`docs/corsa_e_pids.json`)
 
-All starter UDS DIDs, CAN headers, and scaling formulas in [`docs/corsa_e_pids.json`](docs/corsa_e_pids.json) are explicitly marked `"verified": false` so nothing is silently assumed or hardcoded in Kotlin. Use the built-in **Diagnose → Entwickler-Tools (Raw-OBD-Log & AT/UDS-Konsole)** in your vehicle to verify and calibrate each PID for your exact Corsa-e / e-CMP firmware version, then flip `"verified": true`.
+[`docs/corsa_e_pids.json`](docs/corsa_e_pids.json) contains **37 community-verified Stellantis e-CMP UDS PIDs** (Opel Corsa-e / Mokka-e, Peugeot e-208 / e-2008, Citroën ë-C4, DS 3 E-Tense) cross-checked against:
+- **[OBDb / Peugeot-e-208](https://github.com/OBDb/Peugeot-e-208)**
+- **[EsaHub / EscoEvObdScanner](https://github.com/EsaHub/EscoEvObdScanner)** (`stellantis-ecmp.json`, CC BY 4.0 by Esa Pelttari)
+- **[meatpiHQ / wican-fw](https://github.com/meatpiHQ/wican-fw)** (e-208 / Mokka-e profiles)
+
+| ECU | TX Header (`ATSH` / `ATFCSH`) | RX Filter (`ATCRA`) | Key Verified UDS DIDs |
+| :--- | :---: | :---: | :--- |
+| **BMS** (Battery Management) | `6B4` | `694` | `D815` (V), `D816` (A), `D410`/`D810` (SoC), `D860` (SoH), `D865` (kWh), `D817`/`D877`/`D87D` (Temp), `D86F`/`D870`/`D440` (108 Cells), `D871`/`D873` (Limits), `D42E` (Lifetime kWh), `D822` (12V) |
+| **VCU** (Vehicle Control) | `6A2` | `682` | `D402` (Speed), `D8D9` (Motor kW), `D8D0` (Torque), `D8CF` (RPM), `D8CD`/`D8CE`/`D8E1`/`D8F9`/`D8FB` (Temps), `D434` (Ambient), `D49C` (Odometer) |
+| **MCU** (Inverter EMR3) | `6A6` | `686` | `D407` (Accel Pedal), `DC6A` (Inverter Temp), `DC06` (DC Link V) |
+| **OBC** (Charger & DC-DC) | `590` | `58F` | `D82B` (AC Grid V), `D829` (12V DC-DC A), `D854` (Charge Cable) |
+
+> **Note:** Because Stellantis e-CMP uses non-standard CAN response IDs (`rx ≠ tx + 8`), `Elm327Session` automatically configures `ATFCSD300000`, `ATFCSM1`, and per-ECU `ATFCSH<tx>` so ISO-TP multi-frame queries (like `22 D440` for all 108 cells) work out of the box. You can also inspect live traffic anytime via **Diagnose → Entwickler-Tools (Raw-OBD-Log & AT/UDS-Konsole)**.
 
 ---
 

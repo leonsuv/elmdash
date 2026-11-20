@@ -83,8 +83,8 @@ class PidCatalog:
             self.tx_to_ecu[cfg.tx_header] = cfg
 
         self.pids: dict[str, PidConfig] = {}
-        # Lookup by (tx_header, service, did)
-        self.by_request: dict[tuple[str, str, str], PidConfig] = {}
+        # Lookup by (tx_header, service, did) -> list of PidConfigs sharing the DID (e.g., 0xD42E)
+        self.by_request: dict[tuple[str, str, str], list[PidConfig]] = {}
 
         for p in raw.get("pids", []):
             pid = PidConfig(
@@ -94,7 +94,7 @@ class PidCatalog:
                 service=p["service"].upper(),
                 did=p["did"].upper(),
                 tier=p.get("tier", "MEDIUM").upper(),
-                expected_frames=int(p.get("expectedFrames", 1)),
+                expected_frames=int(p.get("expectedFrames") or 1),
                 value_type=p.get("valueType", "scalar"),
                 byte_offset=int(p.get("byteOffset", 0)),
                 byte_length=int(p.get("byteLength", 2)),
@@ -111,7 +111,7 @@ class PidCatalog:
             self.pids[pid.id] = pid
             ecu_cfg = self.ecus.get(pid.ecu)
             if ecu_cfg is not None:
-                self.by_request[(ecu_cfg.tx_header, pid.service, pid.did)] = pid
+                self.by_request.setdefault((ecu_cfg.tx_header, pid.service, pid.did), []).append(pid)
 
 
 class TelemetryModel:
@@ -186,16 +186,21 @@ class TelemetryModel:
             "brake_pressure": brake_bar,
             "soc": self.soc_pct,
             "soc_raw": max(3.0, min(97.0, self.soc_pct * 0.94 + 3.0)),
+            "available_energy": max(0.0, 46.3 * (self.soh_pct / 100.0) * (self.soc_pct / 100.0)),
             "battery_temp": battery_temp,
             "battery_temp_min": battery_temp - 1.5,
             "battery_temp_max": battery_temp + 2.0,
+            "battery_temp_delta": 3.5,
             "max_charge_power": 100.0 if self.soc_pct < 35.0 else max(18.0, 100.0 - (self.soc_pct - 35.0) * 1.3),
-            "max_discharge_power": 100.0 if self.soc_pct > 15.0 else 65.0,
+            "max_discharge_power": 158.0 if self.soc_pct > 15.0 else 85.0,
             "inverter_temp": 36.0 + abs(inverter_kw) * 0.35,
+            "dc_link_voltage": hv_voltage - 0.8,
             "motor_temp": 44.0 + abs(motor_kw) * 0.42,
+            "dcdc_temp": 34.0,
             "aux_12v_voltage": 14.35,
             "aux_12v_current": dcdc_w / 14.35,
             "charge_power": 0.0,
+            "charge_cable_state": 0.0,
             "ac_voltage": 0.0,
             "ac_current": 0.0,
             "dcdc_power": dcdc_w,
@@ -203,6 +208,7 @@ class TelemetryModel:
             "hvac_power": hvac_kw,
             "ptc_heater_power": ptc_kw,
             "coolant_temp_hv": battery_temp - 2.0,
+            "coolant_temp_heater": 38.0,
             "cabin_temp": 21.5,
             "ambient_temp": 14.5,
             "soh": self.soh_pct,
@@ -211,6 +217,7 @@ class TelemetryModel:
             "total_energy_discharged": 3890.2,
             "cell_voltage_min": min(cells),
             "cell_voltage_max": max(cells),
+            "cell_voltage_avg": sum(cells) / len(cells),
             "odometer": self.base_odometer_km,
             "cell_voltages": cells,
         }
@@ -252,16 +259,21 @@ class TelemetryModel:
             "brake_pressure": 0.0,
             "soc": self.soc_pct,
             "soc_raw": max(3.0, min(97.0, self.soc_pct * 0.94 + 3.0)),
+            "available_energy": max(0.0, 46.3 * (self.soh_pct / 100.0) * (self.soc_pct / 100.0)),
             "battery_temp": battery_temp,
             "battery_temp_min": battery_temp - 1.5,
             "battery_temp_max": battery_temp + 2.5,
+            "battery_temp_delta": 4.0,
             "max_charge_power": charge_kw + 2.0,
-            "max_discharge_power": 100.0,
+            "max_discharge_power": 158.0,
             "inverter_temp": 28.0,
+            "dc_link_voltage": hv_voltage,
             "motor_temp": 30.0,
+            "dcdc_temp": 36.0,
             "aux_12v_voltage": 14.4,
             "aux_12v_current": 18.0,
             "charge_power": charge_kw,
+            "charge_cable_state": 1.0,
             "ac_voltage": 0.0,
             "ac_current": 0.0,
             "dcdc_power": 260.0,
@@ -269,6 +281,7 @@ class TelemetryModel:
             "hvac_power": 1.4,
             "ptc_heater_power": 0.0,
             "coolant_temp_hv": battery_temp - 4.0,
+            "coolant_temp_heater": 28.0,
             "cabin_temp": 21.0,
             "ambient_temp": 14.5,
             "soh": self.soh_pct,
@@ -277,6 +290,7 @@ class TelemetryModel:
             "total_energy_discharged": 3890.2,
             "cell_voltage_min": min(cells),
             "cell_voltage_max": max(cells),
+            "cell_voltage_avg": sum(cells) / len(cells),
             "odometer": self.base_odometer_km,
             "cell_voltages": cells,
         }
@@ -346,9 +360,9 @@ class ElmSessionState:
     # Simulated per-ECU UDS DTC records: (b0, b1, ftb, status)
     dtc_store: dict[str, list[tuple[int, int, int, int]]] = field(
         default_factory=lambda: {
-            "764": [],  # BMS healthy by default
-            "760": [(0xD2, 0x08, 0x00, 0x04)],  # VCU: U1208-00 Pending (sporadic CAN message)
-            "765": [(0xD1, 0x13, 0x87, 0x09)],  # OBC: U1113-87 Active+Confirmed (wallbox handshake)
+            "6B4": [],  # BMS healthy by default
+            "6A2": [(0xD2, 0x08, 0x00, 0x04)],  # VCU: U1208-00 Pending (sporadic CAN message)
+            "590": [(0xD1, 0x13, 0x87, 0x09)],  # OBC: U1113-87 Active+Confirmed (wallbox handshake)
         }
     )
 
@@ -560,6 +574,8 @@ class Elm327ClientHandler:
         if cmd.startswith("ATSH") and len(cmd) >= 7:
             state.tx_header = cmd[4:].upper()
             return (["OK"], 0.0)
+        if cmd.startswith("ATFCSH") or cmd.startswith("ATFCSD") or cmd.startswith("ATFCSM"):
+            return (["OK"], 0.0)
         if cmd == "ATCRA":
             state.rx_filter = None
             return (["OK"], 0.0)
@@ -601,20 +617,35 @@ class Elm327ClientHandler:
         if cmd.startswith("22") and len(cmd) in (6, 7):
             service = "22"
             did = cmd[2:6]
-            pid = self.catalog.by_request.get((state.tx_header, service, did))
-            if pid is None:
+            pid_list = self.catalog.by_request.get((state.tx_header, service, did))
+            if not pid_list:
                 # Negative Response: 7F 22 31 (requestOutOfRange)
                 return self._format_single_frame(bytes([0x7F, 0x22, 0x31]), state, rx_header=self._rx_header(state))
 
-            ecu = self.catalog.ecus[pid.ecu]
+            ecu = self.catalog.ecus[pid_list[0].ecu]
             if state.rx_filter and state.rx_filter != ecu.rx_header:
                 return ["NO DATA"]
 
             snap = self.model.snapshot()
-            if pid.id not in snap:
-                return ["NO DATA"]
+            if len(pid_list) == 1:
+                pid = pid_list[0]
+                if pid.id not in snap:
+                    return ["NO DATA"]
+                data_bytes = encode_value(pid, snap[pid.id])
+            else:
+                buf = bytearray()
+                for pid in pid_list:
+                    if pid.id not in snap:
+                        continue
+                    part = encode_value(pid, snap[pid.id])
+                    if len(part) > len(buf):
+                        buf.extend(b"\x00" * (len(part) - len(buf)))
+                    start = pid.byte_offset
+                    buf[start : len(part)] = part[start:]
+                if not buf:
+                    return ["NO DATA"]
+                data_bytes = bytes(buf)
 
-            data_bytes = encode_value(pid, snap[pid.id])
             payload = bytes([0x62]) + bytes.fromhex(did) + data_bytes
 
             if len(payload) <= 7:
