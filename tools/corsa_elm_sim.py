@@ -218,8 +218,18 @@ class TelemetryModel:
             "cell_voltage_min": min(cells),
             "cell_voltage_max": max(cells),
             "cell_voltage_avg": sum(cells) / len(cells),
+            "lowest_cell_idx": float(cells.index(min(cells)) + 1),
+            "highest_cell_idx": float(cells.index(max(cells)) + 1),
             "odometer": self.base_odometer_km,
             "cell_voltages": cells,
+            "cell_soh": self._generate_cell_soh(self.soh_pct),
+            "temp_probes": self._generate_temp_probes(battery_temp),
+            "contactor_closes": 3886.0,
+            "time_above_55c": 0.0,
+            "isolation_pos_kohm": 4920.0,
+            "isolation_neg_kohm": 4780.0,
+            "drive_mode": 6.0,
+            "gear_selector": 3.0 if speed > 0.5 else 0.0,
         }
 
     def _dc_charge_snapshot(self, elapsed: float, dt: float) -> dict[str, Any]:
@@ -291,8 +301,18 @@ class TelemetryModel:
             "cell_voltage_min": min(cells),
             "cell_voltage_max": max(cells),
             "cell_voltage_avg": sum(cells) / len(cells),
+            "lowest_cell_idx": float(cells.index(min(cells)) + 1),
+            "highest_cell_idx": float(cells.index(max(cells)) + 1),
             "odometer": self.base_odometer_km,
             "cell_voltages": cells,
+            "cell_soh": self._generate_cell_soh(self.soh_pct),
+            "temp_probes": self._generate_temp_probes(battery_temp),
+            "contactor_closes": 3886.0,
+            "time_above_55c": 0.0,
+            "isolation_pos_kohm": 4920.0,
+            "isolation_neg_kohm": 4780.0,
+            "drive_mode": 6.0,
+            "gear_selector": 0.0,
         }
 
     def _multiframe_snapshot(self, elapsed: float, dt: float) -> dict[str, Any]:
@@ -315,6 +335,27 @@ class TelemetryModel:
             cell_v = avg_cell + (wave * spread_v * 0.5)
             cells.append(max(2.5, min(4.5, cell_v)))
         return cells
+
+    @staticmethod
+    def _generate_cell_soh(min_soh: float, count: int = 108) -> list[float]:
+        # Real e-CMP behavior: pack SOH equals weakest cell; average is ~2.5% higher
+        out: list[float] = []
+        for idx in range(count):
+            if idx in (32, 100):
+                out.append(min_soh)
+            else:
+                offset = 1.2 + ((idx * 17) % 28) * 0.1
+                out.append(min(100.0, min_soh + offset))
+        return out
+
+    @staticmethod
+    def _generate_temp_probes(avg_temp: float, count: int = 54) -> list[float]:
+        out: list[float] = []
+        for idx in range(count):
+            module = idx // 3
+            delta = math.sin(module * 0.45) * 1.6 + ((idx % 3) - 1) * 0.4
+            out.append(round(avg_temp + delta))
+        return out
 
 
 def encode_value(pid: PidConfig, value: Any) -> bytes:
@@ -595,6 +636,13 @@ class Elm327ClientHandler:
         if not cmd or any(c not in "0123456789ABCDEF" for c in cmd):
             return ["?"]
 
+        # UDS Service 0x3E TesterPresent (ECU link test)
+        if cmd.startswith("3E"):
+            rx_hdr = self._rx_header(state)
+            if state.tx_header in ("6B4", "6A2", "6A6", "590", "6AD", "6B5", "74A", "5B0"):
+                return self._format_single_frame(bytes([0x7E, 0x00]), state, rx_header=rx_hdr)
+            return ["NO DATA"]
+
         # UDS Service 0x19 ReadDTCInformation (sub-function 0x02 reportDTCByStatusMask)
         if cmd.startswith("1902") and len(cmd) >= 6:
             rx_hdr = self._rx_header(state)
@@ -617,6 +665,18 @@ class Elm327ClientHandler:
         if cmd.startswith("22") and len(cmd) in (6, 7):
             service = "22"
             did = cmd[2:6]
+            rx_hdr = self._rx_header(state)
+            if did == "F186":
+                return self._format_single_frame(bytes([0x62, 0xF1, 0x86, 0x01]), state, rx_header=rx_hdr)
+            if did == "F18B":
+                # BCD date: 2023-05-14
+                return self._format_single_frame(bytes([0x62, 0xF1, 0x8B, 0x20, 0x23, 0x05, 0x14]), state, rx_header=rx_hdr)
+            if did == "F193":
+                payload = bytes([0x62, 0xF1, 0x93]) + b"9842108880"
+                return self._format_multiframe(payload, state, rx_header=rx_hdr)
+            if did == "F195":
+                payload = bytes([0x62, 0xF1, 0x95]) + b"9695412280"
+                return self._format_multiframe(payload, state, rx_header=rx_hdr)
             pid_list = self.catalog.by_request.get((state.tx_header, service, did))
             if not pid_list:
                 # Negative Response: 7F 22 31 (requestOutOfRange)

@@ -244,7 +244,7 @@ fun ConnectionTab() {
         tcpPort = targetPort.toString()
         scope.launch {
             CorsaDashRuntime.preferences.saveSettings(
-                ObdSettings(
+                savedSettings.copy(
                     transportMode = targetMode,
                     adapterMac = targetMac,
                     carBluetoothMac = targetCarMac,
@@ -334,29 +334,51 @@ fun ConnectionTab() {
             }
         }
 
-        // Transport Mode Selector
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        // Transport Mode Selector (2x2 clean grid)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             listOf(
-                TransportMode.BLE to "BLE Vgate 2S",
-                TransportMode.SPP to "SPP Classic",
-                TransportMode.TCP to "TCP Sim"
-            ).forEach { (candidate, title) ->
-                FilterChip(
-                    selected = mode == candidate,
-                    onClick = {
-                        mode = candidate
-                        stopBleScan()
-                    },
-                    label = { Text(title, fontSize = 12.sp) },
-                    modifier = Modifier.weight(1f)
-                )
+                listOf(TransportMode.BLE to "BLE Vgate 2S", TransportMode.SPP to "SPP Classic"),
+                listOf(TransportMode.TCP to "TCP Sim", TransportMode.DEMO to "Demo-Auto")
+            ).forEach { pair ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    pair.forEach { (candidate, title) ->
+                        FilterChip(
+                            selected = mode == candidate,
+                            onClick = {
+                                mode = candidate
+                                stopBleScan()
+                            },
+                            label = { Text(title, fontSize = 12.sp, maxLines = 1) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
         }
 
-        if (mode == TransportMode.TCP) {
+        if (mode == TransportMode.DEMO) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, EvColors.Emerald.copy(alpha = 0.45f)),
+                colors = CardDefaults.cardColors(containerColor = EvColors.Surface)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Integriertes Demo-Auto (Stellantis e-CMP)", fontWeight = FontWeight.Bold, color = EvColors.TextPrimary)
+                    Text(
+                        "Kein OBD2-Adapter nötig! Simuliert direkt in der App einen echten Corsa-e / Mokka-e inkl. 108 Zellspannungen, 108 Zell-SoH, 54 Temperaturfühlern, Last-Sag-Analyse, Lifetime-kWh, ECU-Test und PDF-Bericht.",
+                        fontSize = 12.sp,
+                        color = EvColors.TextSecondary
+                    )
+                    Button(
+                        onClick = { connectWith(TransportMode.DEMO) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Demo-Auto starten", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else if (mode == TransportMode.TCP) {
             // 1-Tap TCP Simulator Quick Connect
             Card(
                 modifier = Modifier.fillMaxWidth(),

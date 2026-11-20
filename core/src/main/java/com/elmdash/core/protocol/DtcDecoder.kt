@@ -1,5 +1,16 @@
 package com.elmdash.core.protocol
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import java.util.concurrent.ConcurrentHashMap
+
+@Serializable
+private data class ExternalDtcEntry(
+    val dtc: String = "",
+    val s_dsc: String = "",
+    val l_dsc: String = ""
+)
+
 data class DecodedDtc(
     val ecuKey: String,
     val ecuName: String,
@@ -27,6 +38,23 @@ data class EcuDiagnosticReport(
  * Decodes 3-byte UDS DTCs + 1-byte status masks into SAE J2012 codes (e.g. P0A7F-00, U1113-87).
  */
 object DtcDecoder {
+
+    private val externalDescriptions = ConcurrentHashMap<String, String>()
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * Loads Stellantis e-CMP DTC descriptions (e.g. from Battery-Emulator stellantis_ecmp_dtc.json).
+     */
+    fun loadExternalDictionary(jsonText: String) {
+        val entries = runCatching { json.decodeFromString<List<ExternalDtcEntry>>(jsonText) }.getOrDefault(emptyList())
+        for (e in entries) {
+            val key = e.dtc.trim().uppercase()
+            val desc = e.l_dsc.trim().ifEmpty { e.s_dsc.trim() }
+            if (key.isNotEmpty() && desc.isNotEmpty()) {
+                externalDescriptions[key] = desc
+            }
+        }
+    }
 
     private val KNOWN_DESCRIPTIONS = mapOf(
         "P0A7F" to "HV-Batterie Alterung / Kapazitätsgrenze",
@@ -72,7 +100,7 @@ object DtcDecoder {
                     isPending = (status and 0x04) != 0,
                     isConfirmed = (status and 0x08) != 0,
                     isMilOn = (status and 0x80) != 0,
-                    description = describe(code)
+                    description = describe(code, ftbHex)
                 )
             )
         }
@@ -93,7 +121,9 @@ object DtcDecoder {
         return "$prefix$d1${d2.toString(16).uppercase()}${d3.toString(16).uppercase()}${d4.toString(16).uppercase()}"
     }
 
-    private fun describe(code: String): String {
+    private fun describe(code: String, ftbHex: String): String {
+        externalDescriptions["$code$ftbHex"]?.let { return it }
+        externalDescriptions[code]?.let { return it }
         KNOWN_DESCRIPTIONS[code]?.let { return it }
         return when (code.firstOrNull()) {
             'P' -> "Antriebsstrang / HV-System Fehlercode ($code)"

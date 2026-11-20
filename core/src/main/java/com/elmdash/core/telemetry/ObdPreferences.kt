@@ -1,6 +1,7 @@
 package com.elmdash.core.telemetry
 
 import android.content.Context
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -15,7 +16,8 @@ private val Context.obdDataStore by preferencesDataStore(name = "elmdash_obd_pre
 enum class TransportMode {
     TCP,
     BLE,
-    SPP
+    SPP,
+    DEMO
 }
 
 data class ObdSettings(
@@ -23,7 +25,9 @@ data class ObdSettings(
     val adapterMac: String = "",
     val carBluetoothMac: String = "",
     val tcpHost: String = TcpObdTransport.DEFAULT_EMULATOR_HOST,
-    val tcpPort: Int = TcpObdTransport.DEFAULT_PORT
+    val tcpPort: Int = TcpObdTransport.DEFAULT_PORT,
+    val electricityPriceEurPerKwh: Double = 0.35,
+    val reportVinOrNote: String = ""
 )
 
 /**
@@ -39,7 +43,9 @@ class ObdPreferences(private val context: Context) {
             adapterMac = prefs[KEY_ADAPTER_MAC].orEmpty(),
             carBluetoothMac = prefs[KEY_CAR_BT_MAC].orEmpty(),
             tcpHost = prefs[KEY_TCP_HOST] ?: TcpObdTransport.DEFAULT_EMULATOR_HOST,
-            tcpPort = prefs[KEY_TCP_PORT] ?: TcpObdTransport.DEFAULT_PORT
+            tcpPort = prefs[KEY_TCP_PORT] ?: TcpObdTransport.DEFAULT_PORT,
+            electricityPriceEurPerKwh = prefs[KEY_ELEC_PRICE] ?: 0.35,
+            reportVinOrNote = prefs[KEY_REPORT_VIN].orEmpty()
         )
     }
 
@@ -52,6 +58,8 @@ class ObdPreferences(private val context: Context) {
             prefs[KEY_CAR_BT_MAC] = settings.carBluetoothMac.trim().uppercase()
             prefs[KEY_TCP_HOST] = settings.tcpHost.trim().ifEmpty { TcpObdTransport.DEFAULT_EMULATOR_HOST }
             prefs[KEY_TCP_PORT] = settings.tcpPort.coerceIn(1, 65535)
+            prefs[KEY_ELEC_PRICE] = settings.electricityPriceEurPerKwh.coerceIn(0.01, 5.0)
+            prefs[KEY_REPORT_VIN] = settings.reportVinOrNote.trim()
         }
     }
 
@@ -61,5 +69,7 @@ class ObdPreferences(private val context: Context) {
         private val KEY_CAR_BT_MAC = stringPreferencesKey("car_bt_mac")
         private val KEY_TCP_HOST = stringPreferencesKey("tcp_host")
         private val KEY_TCP_PORT = intPreferencesKey("tcp_port")
+        private val KEY_ELEC_PRICE = doublePreferencesKey("electricity_price_eur")
+        private val KEY_REPORT_VIN = stringPreferencesKey("report_vin_note")
     }
 }

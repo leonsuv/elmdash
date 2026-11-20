@@ -24,6 +24,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.elmdash.app.CorsaDashRuntime
+import com.elmdash.core.telemetry.ObdSettings
 import com.elmdash.core.telemetry.TrackedTrip
 import com.elmdash.core.telemetry.TripTracker
 import kotlinx.coroutines.launch
@@ -56,6 +58,9 @@ fun TripsTab() {
     val scope = rememberCoroutineScope()
     val trips by CorsaDashRuntime.tripTracker.trips.collectAsState()
     val snapshot by CorsaDashRuntime.repository.snapshot.collectAsState()
+    val settings by CorsaDashRuntime.preferences.settingsFlow.collectAsState(initial = ObdSettings())
+    val health by CorsaDashRuntime.batteryHealth.state.collectAsState()
+    val priceEur = settings.electricityPriceEurPerKwh
 
     var showCreateDialog by remember { mutableStateOf(false) }
 
@@ -71,7 +76,7 @@ fun TripsTab() {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Dauer-Trips (${trips.size})",
                     fontWeight = FontWeight.Bold,
@@ -79,7 +84,7 @@ fun TripsTab() {
                     color = EvColors.TextPrimary
                 )
                 Text(
-                    text = "Laufen parallel weiter, speichern automatisch & erkennen Kilometer-Lücken",
+                    text = "Laufen parallel weiter, speichern automatisch & berechnen Stromkosten",
                     fontSize = 11.sp,
                     color = EvColors.TextSecondary
                 )
@@ -87,6 +92,41 @@ fun TripsTab() {
             Button(onClick = { showCreateDialog = true }) {
                 Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text(" Trip")
+            }
+        }
+
+        // Electricity price quick selector (EscoEvObdScanner cost estimate)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, EvColors.Border),
+            colors = CardDefaults.cardColors(containerColor = EvColors.Surface)
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Strompreis-Schätzung", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = EvColors.TextPrimary)
+                    Text(
+                        String.format(Locale.GERMANY, "%.2f €/kWh", priceEur),
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = EvColors.CyanLight
+                    )
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0.25, 0.35, 0.45, 0.59).forEach { preset ->
+                        FilterChip(
+                            selected = kotlin.math.abs(priceEur - preset) < 0.005,
+                            onClick = {
+                                scope.launch {
+                                    CorsaDashRuntime.preferences.saveSettings(settings.copy(electricityPriceEurPerKwh = preset))
+                                }
+                            },
+                            label = { Text(String.format(Locale.GERMANY, "%.2f€", preset), fontSize = 11.sp) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
         }
 
@@ -118,11 +158,65 @@ fun TripsTab() {
             TripCard(
                 trip = trip,
                 startedLabel = dateFmt.format(Date(trip.startedAtMs)),
+                priceEurPerKwh = priceEur,
                 onSetPrimary = { scope.launch { CorsaDashRuntime.tripTracker.setPrimary(trip.id) } },
                 onToggleRun = { scope.launch { CorsaDashRuntime.tripTracker.toggleRunning(trip.id) } },
                 onReset = { scope.launch { CorsaDashRuntime.tripTracker.resetTrip(trip.id) } },
                 onDelete = { scope.launch { CorsaDashRuntime.tripTracker.deleteTrip(trip.id) } }
             )
+        }
+
+        // Lifetime Vehicle Counters (EscoEvObdScanner BMS 0xD42E / 0xD416 / 0xE082)
+        val totalIn = snapshot.getValue("total_energy_charged")
+        val totalOut = snapshot.getValue("total_energy_discharged")
+        val starts = snapshot.getValue("contactor_closes")
+        val time55 = snapshot.getValue("time_above_55c")
+        val odo = snapshot.getValue("odometer")
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, EvColors.Border),
+            colors = CardDefaults.cardColors(containerColor = EvColors.Surface)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Fahrzeug-Lebensdauer-Zähler (BMS)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = EvColors.TextPrimary)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TripMetricColumn(
+                        label = "TOTAL kWh IN",
+                        value = totalIn?.let { String.format(Locale.GERMANY, "%,.0f", it) } ?: "--",
+                        unit = "kWh geladen",
+                        emerald = true
+                    )
+                    TripMetricColumn(
+                        label = "TOTAL kWh OUT",
+                        value = totalOut?.let { String.format(Locale.GERMANY, "%,.0f", it) } ?: "--",
+                        unit = "kWh entladen",
+                        accent = true
+                    )
+                    TripMetricColumn(
+                        label = "VOLLZYKLEN",
+                        value = health.fullCycleEquivalents?.let { String.format(Locale.US, "%.0f", it) } ?: "--",
+                        unit = "Äquiv."
+                    )
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TripMetricColumn(
+                        label = "HV-STARTS",
+                        value = starts?.let { String.format(Locale.GERMANY, "%,.0f", it) } ?: "--",
+                        unit = "Schütz-Zyklen"
+                    )
+                    TripMetricColumn(
+                        label = "ZEIT > 55 °C",
+                        value = time55?.let { String.format(Locale.US, "%.0f", it) } ?: "--",
+                        unit = "Sekunden"
+                    )
+                    TripMetricColumn(
+                        label = "KILOMETER",
+                        value = odo?.let { String.format(Locale.GERMANY, "%,.0f", it) } ?: "--",
+                        unit = "km (VCU)"
+                    )
+                }
+            }
         }
     }
 
@@ -159,6 +253,7 @@ fun TripsTab() {
 private fun TripCard(
     trip: TrackedTrip,
     startedLabel: String,
+    priceEurPerKwh: Double,
     onSetPrimary: () -> Unit,
     onToggleRun: () -> Unit,
     onReset: () -> Unit,
@@ -269,6 +364,28 @@ private fun TripCard(
                     label = "GESAMT KM",
                     value = String.format(Locale.US, "%.1f", trip.totalDistanceKm),
                     unit = "inkl. Odo"
+                )
+            }
+
+            // Electricity Cost Estimate (EscoEvObdScanner)
+            val tripCostEur = (trip.netEnergyKwh * priceEurPerKwh).coerceAtLeast(0.0)
+            val costPer100Eur = (trip.consumptionKwhPer100Km * priceEurPerKwh).coerceAtLeast(0.0)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(EvColors.SurfaceElevated)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Stromkosten (geschätzt)", fontSize = 11.sp, color = EvColors.TextSecondary)
+                Text(
+                    text = String.format(Locale.GERMANY, "%.2f €  •  %.2f €/100 km", tripCostEur, costPer100Eur),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.sp,
+                    color = EvColors.Emerald
                 )
             }
 

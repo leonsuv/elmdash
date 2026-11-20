@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -35,8 +36,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,12 +47,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.elmdash.app.CorsaDashRuntime
 import com.elmdash.core.protocol.EcuDiagnosticReport
+import com.elmdash.core.telemetry.ObdSettings
 import com.elmdash.core.telemetry.TripTracker
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -62,8 +67,21 @@ import java.util.Locale
  */
 @Composable
 fun DiagnosticsTab() {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snapshot by CorsaDashRuntime.repository.snapshot.collectAsState()
+    val health by CorsaDashRuntime.batteryHealth.state.collectAsState()
+    val settings by CorsaDashRuntime.preferences.settingsFlow.collectAsState(initial = ObdSettings())
+
+    var subTab by remember { mutableIntStateOf(0) } // 0 = Übersicht & PDF, 1 = Akku & 108s, 2 = ECU-Test & CSV
+    var vinNote by remember { mutableStateOf(settings.reportVinOrNote) }
+    var pdfStatus by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(settings.reportVinOrNote) {
+        if (vinNote.isBlank() && settings.reportVinOrNote.isNotBlank()) {
+            vinNote = settings.reportVinOrNote
+        }
+    }
 
     var reports by remember { mutableStateOf<List<EcuDiagnosticReport>>(emptyList()) }
     var isScanning by remember { mutableStateOf(false) }
@@ -115,6 +133,26 @@ fun DiagnosticsTab() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // 3-Tab Sub-Navigation (Übersicht & PDF | Akku & 108s | ECU-Test & CSV)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("Übersicht & PDF", "Akku & 108s", "ECU-Test & CSV").forEachIndexed { idx, title ->
+                FilterChip(
+                    selected = subTab == idx,
+                    onClick = { subTab = idx },
+                    label = { Text(title, fontSize = 11.sp, maxLines = 1) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        if (subTab == 1) {
+            BatteryDeepDiveTab(snapshot = snapshot, health = health)
+        } else if (subTab == 2) {
+            EcuLinkAndCsvTab()
+        } else {
         // Carly-Style Hero Vehicle Health Card
         val heroColor = when {
             healthScore == null -> EvColors.Cyan
@@ -348,6 +386,62 @@ fun DiagnosticsTab() {
             }
         }
 
+        // 6-Point EscoEvObdScanner Battery Health Checks
+        if (health.checks.isNotEmpty()) {
+            BatteryChecksCard(checks = health.checks)
+        }
+
+        // PDF Battery Health Certificate Generator (EscoEvObdScanner Report)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            border = BorderStroke(1.dp, EvColors.Cyan.copy(alpha = 0.45f)),
+            colors = CardDefaults.cardColors(containerColor = EvColors.Surface)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("PDF Batterie-Bericht (Zertifikat)", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = EvColors.TextPrimary)
+                Text(
+                    "Erstellt einen 2-seitigen A4-PDF-Bericht mit 6-Punkte-Bewertung, allen 108 Zellspannungen, 108 Zell-SoH, 54 Temperaturfühlern, Last-Sag, Total kWh IN/OUT, BMS-Info & DTCs.",
+                    fontSize = 11.sp,
+                    color = EvColors.TextSecondary
+                )
+                OutlinedTextField(
+                    value = vinNote,
+                    onValueChange = { vinNote = it },
+                    label = { Text("VIN / Fahrzeug-Notiz (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = {
+                        scope.launch {
+                            CorsaDashRuntime.preferences.saveSettings(settings.copy(reportVinOrNote = vinNote))
+                            runCatching {
+                                val file = BatteryReportPdfGenerator.generate(
+                                    context = context,
+                                    snapshot = snapshot,
+                                    health = health,
+                                    dtcReports = reports,
+                                    vinOrNote = vinNote
+                                )
+                                pdfStatus = "Gespeichert: ${file.name}"
+                                BatteryReportPdfGenerator.shareFile(context, file, "application/pdf")
+                            }.onFailure {
+                                pdfStatus = "PDF-Fehler: ${it.message}"
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Text("  PDF Batterie-Bericht erstellen & teilen", fontWeight = FontWeight.Bold)
+                }
+                if (pdfStatus != null) {
+                    Text(pdfStatus!!, fontSize = 11.sp, color = EvColors.Emerald)
+                }
+            }
+        }
+
         // Hidden Developer Tools Entry (Raw OBD Log + AT/UDS Console + PID Inspector)
         OutlinedButton(
             onClick = { showDevToolsDialog = true },
@@ -357,6 +451,7 @@ fun DiagnosticsTab() {
             Icon(EvIcons.Terminal, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.size(8.dp))
             Text("Entwickler-Tools (Raw-OBD-Log & AT/UDS-Konsole)", fontSize = 12.sp)
+        }
         }
     }
 

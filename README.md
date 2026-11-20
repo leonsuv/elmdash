@@ -38,9 +38,14 @@
   - Tap to configure, drag-and-drop to reposition on the 12×6 grid, and horizontal fullscreen preview (`16:9` fit-height).
   - Multiple customizable tabs (`Fahren`, `Laden`, `Akku`, plus custom tabs), optional **Endless Scroll** ribbon in Android Auto, and **My Dashboards / My Cards** template library.
   - Instant live hot-reload from Phone Companion App to Android Auto.
-- **53 Telemetry Channels (37 Verified UDS PIDs + 16 Computed EV Metrics):**
-  - Covers 4 Stellantis e-CMP ECUs (`BMS 0x6B4→0x694`, `VCU 0x6A2→0x682`, `MCU/Inverter 0x6A6→0x686`, `OBC/DC-DC 0x590→0x58F`): HV voltage/current/power (kW BMS = V×A), E-Motor kW/torque/RPM, SoC (calibrated & raw), SoH, available energy (kWh), 108s2p cell voltages (ISO-TP multi-frame `22 D440`), battery/inverter/motor/DC-DC/OBC/coolant temperatures, 12V aux voltage & DC-DC current/power, AC grid voltage, charge/discharge 10s power limits, HV isolation resistance, lifetime kWh charged/discharged, drivetrain efficiency, and power losses.
-  - Single Source of Truth catalog in [`docs/corsa_e_pids.json`](docs/corsa_e_pids.json) (shared by both the Android app and the Python ELM327 simulator).
+- **63 Telemetry Channels (47 Verified UDS PIDs + 16 Computed EV Metrics):**
+  - Covers 4 Stellantis e-CMP ECUs (`BMS 0x6B4→0x694`, `VCU 0x6A2→0x682`, `MCU/Inverter 0x6A6→0x686`, `OBC/DC-DC 0x590→0x58F`): HV voltage/current/power (kW BMS = V×A), E-Motor kW/torque/RPM, SoC (calibrated & raw), SoH, available energy (kWh), **108s2p cell voltages** (`22 D440`), **108-cell per-cell SoH %** (`22 D4B5`), **54 battery temperature probes** (`22 D442`), battery/inverter/motor/DC-DC/OBC/coolant temperatures, 12V aux voltage & DC-DC current/power, AC grid voltage, charge/discharge 10s power limits, HV isolation resistance (+/-), **Total kWh IN & OUT** (`0xD42E`), **HV contactor closes / starts** (`0xD416`), **time above 55 °C** (`0xE082`), drive mode (`0xD819`), gear selector (`0xD4E7`), BMS manufacture date/HW/SW (`0xF18B`/`F193`/`F195`), drivetrain efficiency, and power losses.
+  - Single Source of Truth catalog in [`docs/corsa_e_pids.json`](docs/corsa_e_pids.json) (shared by the Android app, the built-in Demo Car, and the Python ELM327 simulator).
+- **Full Battery Health Suite & 2-Page PDF Battery Certificate (`Diagnose` Tab):**
+  - **6-Point Battery Health Rating (`GOOD` / `ATTENTION` / `CHECK`)** following *EscoEvObdScanner*, *Midtronics 2025*, *UNECE R100 (500 Ω/V)*, and *Stellantis Warranty (70% / 8 yr / 160,000 km)*: Pack SoH, Cell Spread at Rest (`≤ 5 A`), **Cells Under Load (`mV / 100 A` internal resistance sag)**, Temperature Spread, HV Insulation, and BMS Faults.
+  - Interactive **108-Cell Voltage Heatmap (12×9)**, **108-Cell SoH % Heatmap (12×9)**, **54-Probe Temperature Heatmap (9×6)**, **Live DC/AC Charging Curve**, wear rate (`%/10,000 km` & `%/year`), and **2-Page A4 PDF Battery Report** export & share.
+  - **Built-in Demo Car (`Demo-Auto`)** — test the entire app, heatmaps, under-load sag, DTCs, and PDF report with 1 tap without any OBD2 adapter.
+  - **Safe Read-Only 8-ECU Link Test** (`0x3E` / `0x22 F186`), **Live CSV Telemetry Recording** (2 Hz export), **Electricity Cost Estimator (`€/kWh` & `€/100 km`)**, and **Stellantis e-CMP DTC Dictionary** (`stellantis_ecmp_dtc.json`).
 - **High-Throughput ELM327 v2.3 Engine:**
   - Fast-Wake (`\r` / `ATI` before `ATZ`), Corsa-e CAN init (`ATE0`, `ATL0`, `ATS0`, `ATSP6`, `ATCAF1`, `ATCFC1`, `ATFCSD300000`, `ATFCSM1`, `ATAT2`, `ATST0A`), per-ECU `ATSH`/`ATFCSH`/`ATCRA` switching (required for Stellantis e-CMP's non-standard RX IDs like `6B4→694`), expected-frame-count hints, and tiered polling (`FAST` / `MEDIUM` / `SLOW`).
   - Dual-mode Bluetooth support for **Vgate iCar Pro 2S** (**BLE GATT** `18F0 / 2AF0 / 2AF1` + MTU negotiation & **Classic SPP/RFCOMM**), plus **TCP** transport for local simulator testing.
@@ -52,9 +57,11 @@
 
 ## Verified Stellantis e-CMP PIDs (`docs/corsa_e_pids.json`)
 
-[`docs/corsa_e_pids.json`](docs/corsa_e_pids.json) contains **37 community-verified Stellantis e-CMP UDS PIDs** (Opel Corsa-e / Mokka-e, Peugeot e-208 / e-2008, Citroën ë-C4, DS 3 E-Tense) cross-checked against:
-- **[OBDb / Peugeot-e-208](https://github.com/OBDb/Peugeot-e-208)**
-- **[EsaHub / EscoEvObdScanner](https://github.com/EsaHub/EscoEvObdScanner)** (`stellantis-ecmp.json`, CC BY 4.0 by Esa Pelttari)
+[`docs/corsa_e_pids.json`](docs/corsa_e_pids.json) contains **47 community-verified Stellantis e-CMP UDS PIDs** (Opel Corsa-e / Mokka-e, Peugeot e-208 / e-2008, Citroën ë-C4, DS 3 E-Tense) cross-checked against:
+- **[EsaHub / EscoEvObdScanner](https://github.com/EsaHub/EscoEvObdScanner)** (`stellantis-ecmp.json`, CC BY 4.0 by Esa Pelttari — PIDs, 6-point battery ratings & PDF report methodology)
+- **[OBDb / Peugeot-e-208](https://github.com/OBDb/Peugeot-e-208)** (signal definitions & scaling)
+- **[dalathegreat / Battery-Emulator](https://github.com/dalathegreat/Battery-Emulator)** (`stellantis_ecmp_dtc.json` DTC dictionary & BMS bench tests)
+- **[nickn17 / evDash](https://github.com/nickn17/evDash)** (e-208 decoder, charging curve & 12V SoC logic)
 - **[meatpiHQ / wican-fw](https://github.com/meatpiHQ/wican-fw)** (e-208 / Mokka-e profiles)
 
 | ECU | TX Header (`ATSH` / `ATFCSH`) | RX Filter (`ATCRA`) | Key Verified UDS DIDs |

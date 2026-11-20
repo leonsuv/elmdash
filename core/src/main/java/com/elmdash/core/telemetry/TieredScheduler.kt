@@ -133,6 +133,110 @@ class TieredScheduler(
         return allOk
     }
 
+    /**
+     * Reads BMS manufacture date (0xF18B BCD), hardware version (0xF193 ASCII),
+     * and software version (0xF195 ASCII) using read-only UDS Service 0x22.
+     */
+    suspend fun readBmsMetadata(): BmsMetadata {
+        val session = activeSession ?: throw IOException("Keine aktive OBD2-Verbindung")
+        val bms = registry.getEcu("BMS") ?: return BmsMetadata()
+        session.selectEcu(bms.txHeader, bms.rxHeader)
+
+        var mfgDate: String? = null
+        var hwVer: String? = null
+        var swVer: String? = null
+
+        runCatching {
+            val raw = session.sendCommand("22F18B", timeoutMs = 1500L)
+            val res = IsoTpAssembler.assemble(raw, bms.rxHeader)
+            if (res is IsoTpResult.Success && res.payload.size >= 7 && (res.payload[0].toInt() and 0xFF) == 0x62) {
+                // 4-byte BCD date: YYYYMMDD
+                val b0 = res.payload[3].toInt() and 0xFF
+                val b1 = res.payload[4].toInt() and 0xFF
+                val b2 = res.payload[5].toInt() and 0xFF
+                val b3 = res.payload[6].toInt() and 0xFF
+                mfgDate = String.format("%02X%02X-%02X-%02X", b0, b1, b2, b3)
+            }
+        }
+        runCatching {
+            val raw = session.sendCommand("22F193", timeoutMs = 1500L)
+            val res = IsoTpAssembler.assemble(raw, bms.rxHeader)
+            if (res is IsoTpResult.Success && res.payload.size > 3 && (res.payload[0].toInt() and 0xFF) == 0x62) {
+                hwVer = String(res.payload.copyOfRange(3, res.payload.size), Charsets.US_ASCII)
+                    .filter { it in ' '..'~' }.trim().ifEmpty { null }
+            }
+        }
+        runCatching {
+            val raw = session.sendCommand("22F195", timeoutMs = 1500L)
+            val res = IsoTpAssembler.assemble(raw, bms.rxHeader)
+            if (res is IsoTpResult.Success && res.payload.size > 3 && (res.payload[0].toInt() and 0xFF) == 0x62) {
+                swVer = String(res.payload.copyOfRange(3, res.payload.size), Charsets.US_ASCII)
+                    .filter { it in ' '..'~' }.trim().ifEmpty { null }
+            }
+        }
+        return BmsMetadata(
+            manufactureDate = mfgDate,
+            hardwareVersion = hwVer,
+            softwareVersion = swVer,
+            readAtMs = System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * Safe read-only ECU link test (UDS 0x3E TesterPresent with 0x22 F186 fallback)
+     * across catalogued Stellantis e-CMP ECUs (never sweeps below 0x600).
+     */
+    suspend fun runEcuLinkTest(): List<EcuLinkTestResult> {
+        val session = activeSession ?: throw IOException("Keine aktive OBD2-Verbindung")
+        val catalogTargets = listOf(
+            Triple("BMS", "Akku-Management (BMS)", "6B4" to "694"),
+            Triple("VCU", "Fahrzeug-Steuergerät (VCU)", "6A2" to "682"),
+            Triple("MCU", "Inverter & E-Motor (MCU)", "6A6" to "686"),
+            Triple("OBC", "On-Board Charger & DC-DC", "590" to "58F"),
+            Triple("ABS", "ABS / ESP Bremsregelung", "6AD" to "68D"),
+            Triple("EPS", "Elektrische Servolenkung", "6B5" to "695"),
+            Triple("CVM", "Frontkamera / Assistenz", "74A" to "64A"),
+            Triple("AVAS", "Fußgänger-Warnton (AVAS)", "5B0" to "5AF")
+        )
+
+        val results = mutableListOf<EcuLinkTestResult>()
+        for ((id, label, hdrPair) in catalogTargets) {
+            val (tx, rx) = hdrPair
+            val t0 = System.currentTimeMillis()
+            var reachable = false
+            var note = "Keine Antwort"
+            try {
+                session.selectEcu(tx, rx)
+                val raw3e = session.sendCommand("3E00", timeoutMs = 800L)
+                val res3e = IsoTpAssembler.assemble(raw3e, rx)
+                if (res3e is IsoTpResult.Success && (res3e.payload.firstOrNull()?.toInt()?.and(0xFF) == 0x7E)) {
+                    reachable = true
+                    note = "TesterPresent 0x7E OK"
+                } else {
+                    val rawF186 = session.sendCommand("22F186", timeoutMs = 800L)
+                    val resF186 = IsoTpAssembler.assemble(rawF186, rx)
+                    if (resF186 is IsoTpResult.Success && (resF186.payload.firstOrNull()?.toInt()?.and(0xFF) == 0x62)) {
+                        reachable = true
+                        note = "Session 0xF186 OK"
+                    }
+                }
+            } catch (e: Exception) {
+                note = e.message ?: "Timeout"
+            }
+            val elapsed = (System.currentTimeMillis() - t0).coerceAtLeast(1L)
+            results += EcuLinkTestResult(
+                ecuId = id,
+                name = label,
+                txHeader = tx,
+                rxHeader = rx,
+                reachable = reachable,
+                latencyMs = elapsed,
+                note = note
+            )
+        }
+        return results
+    }
+
     fun start(scope: CoroutineScope, transportFactory: () -> ObdTransport) {
         stop()
         pollingJob = scope.launch {
