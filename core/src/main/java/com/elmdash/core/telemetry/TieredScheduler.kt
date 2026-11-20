@@ -13,6 +13,7 @@ import com.elmdash.core.protocol.PidRegistry
 import com.elmdash.core.protocol.PollingTier
 import com.elmdash.core.protocol.UdsParseResult
 import com.elmdash.core.protocol.UdsParser
+import com.elmdash.core.protocol.ValueType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -284,7 +285,13 @@ class TieredScheduler(
         var lastFastMs = 0L
         var lastMediumMs = 0L
         var lastSlowMs = 0L
-        var consecutiveErrors = 0
+        var consecutiveTotalMisses = 0
+        var consecutiveTimeouts = 0
+
+        // Per-PID cooldown: sleeping ECUs (e.g. OBC while driving) or unsupported DIDs
+        // back off for 60 s after 3 misses instead of spamming the bus or disconnecting!
+        val pidMissCounts = HashMap<String, Int>()
+        val pidCooldownUntilMs = HashMap<String, Long>()
 
         var pollWindowStartMs = System.currentTimeMillis()
         var pollsInWindow = 0
@@ -307,31 +314,82 @@ class TieredScheduler(
                 lastSlowMs = now
             }
 
-            if (duePids.isEmpty()) {
+            val activeDuePids = duePids.filter { pid ->
+                val until = pidCooldownUntilMs[pid.id] ?: 0L
+                now >= until
+            }
+
+            if (activeDuePids.isEmpty()) {
                 delay(25L)
                 continue
             }
 
-            // ECU-Grouping: query all due PIDs for one ECU before switching ATSH/ATCRA
-            val groupedByEcu = duePids.groupBy { it.ecu }
+            // ECU-Grouping: query all due PIDs for one ECU before switching ATSH/ATFCSH/ATCRA
+            val groupedByEcu = activeDuePids.groupBy { it.ecu }
             for ((ecuKey, pids) in groupedByEcu) {
                 val ecu = registry.getEcu(ecuKey) ?: continue
                 session.selectEcu(ecu.txHeader, ecu.rxHeader)
 
                 for (pid in pids) {
                     val cmd = pid.buildRequestCommand()
-                    val raw = session.sendCommand(cmd, timeoutMs = 1500L)
+                    val isMultiFrame = pid.expectedFrames == 0 || pid.valueType == ValueType.ARRAY
+                    val cmdTimeoutMs = if (isMultiFrame) 4500L else 1800L
+
+                    val raw = try {
+                        val resp = session.sendCommand(cmd, timeoutMs = cmdTimeoutMs)
+                        consecutiveTimeouts = 0
+                        resp
+                    } catch (e: IOException) {
+                        val isPromptTimeout = e.message?.contains("timeout", ignoreCase = true) == true
+                        if (!isPromptTimeout) {
+                            // Genuine socket / BLE / SPP link drop -> reconnect immediately
+                            throw e
+                        }
+                        consecutiveTimeouts++
+                        rawLog?.append(ObdRawLogEntry.Direction.ERROR, "PID ${pid.id}: timeout #$consecutiveTimeouts")
+                        session.resync()
+                        if (consecutiveTimeouts >= 3) {
+                            throw IOException("ELM327 not responding ($consecutiveTimeouts consecutive timeouts)", e)
+                        }
+                        continue
+                    }
+
+                    // Check for fatal bus/adapter errors vs normal ECU NO DATA
+                    val upperRaw = raw.uppercase()
+                    val isFatalBusError = upperRaw.contains("UNABLE TO CONNECT") ||
+                        upperRaw.contains("BUS INIT") ||
+                        upperRaw.contains("CAN ERROR") ||
+                        upperRaw.contains("BUS ERROR")
+
                     when (val assembled = IsoTpAssembler.assemble(raw, ecu.rxHeader)) {
                         is IsoTpResult.Success -> {
-                            consecutiveErrors = 0
+                            consecutiveTotalMisses = 0
+                            pidMissCounts.remove(pid.id)
+                            pidCooldownUntilMs.remove(pid.id)
                             pollsInWindow++
                             when (val parsed = UdsParser.parse(assembled.payload, pid)) {
-                                is UdsParseResult.Scalar -> repository.updateScalar(pid.id, parsed.value)
-                                is UdsParseResult.ArrayValue -> repository.updateArray(pid.id, parsed.values)
+                                is UdsParseResult.Scalar -> {
+                                    if (parsed.value.isFinite()) {
+                                        repository.updateScalar(pid.id, parsed.value)
+                                    }
+                                }
+                                is UdsParseResult.ArrayValue -> {
+                                    val clean = parsed.values.filter { it.isFinite() }
+                                    if (clean.isNotEmpty()) {
+                                        repository.updateArray(pid.id, clean)
+                                    }
+                                }
                                 is UdsParseResult.NegativeResponse -> {
+                                    // Normal UDS 0x7F (e.g. 0x31 unsupported DID or 0x22 wrong state):
+                                    // never disconnect! Just cool down this PID for 60 s.
+                                    val misses = (pidMissCounts[pid.id] ?: 0) + 1
+                                    pidMissCounts[pid.id] = misses
+                                    if (misses >= 3) {
+                                        pidCooldownUntilMs[pid.id] = System.currentTimeMillis() + 60_000L
+                                    }
                                     rawLog?.append(
                                         ObdRawLogEntry.Direction.ERROR,
-                                        "UDS NRC 0x${parsed.nrc.toString(16)} for ${pid.id}"
+                                        "UDS NRC 0x${parsed.nrc.toString(16)} for ${pid.id} (miss #$misses)"
                                     )
                                 }
                                 is UdsParseResult.Error -> {
@@ -342,21 +400,35 @@ class TieredScheduler(
                         }
 
                         is IsoTpResult.Error -> {
-                            consecutiveErrors++
+                            val misses = (pidMissCounts[pid.id] ?: 0) + 1
+                            pidMissCounts[pid.id] = misses
+                            if (misses >= 3) {
+                                // Back off sleeping ECU / unsupported PID for 60 s
+                                pidCooldownUntilMs[pid.id] = System.currentTimeMillis() + 60_000L
+                            }
                             rawLog?.append(
                                 ObdRawLogEntry.Direction.ERROR,
-                                "PID ${pid.id}: ${assembled.reason}"
+                                "PID ${pid.id}: ${assembled.reason} (miss #$misses)"
                             )
-                            session.resync()
-                            if (consecutiveErrors >= 8) {
-                                throw IOException("Too many consecutive OBD errors ($consecutiveErrors)")
+                            if (isFatalBusError) {
+                                consecutiveTotalMisses += 5
+                                session.resync()
+                            } else if (!upperRaw.contains("NO DATA")) {
+                                // Only resync on framing/garbage errors, NOT on clean NO DATA
+                                session.resync()
+                                consecutiveTotalMisses++
+                            } else {
+                                consecutiveTotalMisses++
+                            }
+                            if (consecutiveTotalMisses >= 25) {
+                                throw IOException("No valid OBD responses ($consecutiveTotalMisses consecutive misses)")
                             }
                         }
                     }
                 }
             }
 
-            onPollCycle?.invoke(repository.snapshot.value.values)
+            runCatching { onPollCycle?.invoke(repository.snapshot.value.values) }
 
             val windowElapsed = System.currentTimeMillis() - pollWindowStartMs
             if (windowElapsed >= 1000L) {
@@ -366,7 +438,7 @@ class TieredScheduler(
             }
 
             if (onValuesUpdated != null && System.currentTimeMillis() - lastCachePersistMs >= 5000L) {
-                onValuesUpdated.invoke(repository.snapshot.value.values)
+                runCatching { onValuesUpdated?.invoke(repository.snapshot.value.values) }
                 lastCachePersistMs = System.currentTimeMillis()
             }
         }

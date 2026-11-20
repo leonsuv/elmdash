@@ -180,8 +180,8 @@ class Elm327Session(
             "ATCFC1",       // CAN flow control on (required for ISO-TP multi-frame)
             "ATFCSD300000", // Flow Control Data: CTS, BS=0, STmin=0 (e-CMP non-standard RX IDs)
             "ATFCSM1",      // Flow Control Mode: user-defined header & data
-            "ATAT2",        // Aggressive adaptive timing
-            "ATST0A"        // Short timeout (10 * 4ms = 40ms)
+            "ATAT2",        // Aggressive adaptive timing (auto-shortens wait on fast replies)
+            "ATST32"        // 200ms max timeout (safe for slower e-CMP ECUs & multi-frame; fast replies return immediately via expectedFrames)
         )
     }
 }
