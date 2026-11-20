@@ -1,0 +1,277 @@
+{
+  "schemaVersion": 1,
+  "columns": 12,
+  "rows": 6,
+  "pages": [
+    {
+      "id": "drive",
+      "title": "Fahren",
+      "widgets": [
+        {
+          "id": "power_gauge",
+          "type": "arc_gauge",
+          "label": "Leistung",
+          "pid": "hv_power",
+          "unit": "kW",
+          "decimals": 1,
+          "col": 0,
+          "row": 0,
+          "colSpan": 5,
+          "rowSpan": 4,
+          "min": -45.0,
+          "max": 105.0
+        },
+        {
+          "id": "speed_num",
+          "type": "big_number",
+          "label": "Tempo",
+          "pid": "speed",
+          "unit": "km/h",
+          "decimals": 0,
+          "col": 5,
+          "row": 0,
+          "colSpan": 3,
+          "rowSpan": 2
+        },
+        {
+          "id": "soc_bar",
+          "type": "battery_bar",
+          "label": "Akku",
+          "pid": "soc",
+          "secondaryPid": "battery_temp",
+          "col": 8,
+          "row": 0,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "power_spark",
+          "type": "sparkline",
+          "label": "Leistungsverlauf",
+          "pid": "hv_power",
+          "unit": "kW",
+          "col": 5,
+          "row": 2,
+          "colSpan": 7,
+          "rowSpan": 2,
+          "min": -40.0,
+          "max": 100.0
+        },
+        {
+          "id": "trip_cons",
+          "type": "big_number",
+          "label": "Ø Verbrauch",
+          "pid": "trip_consumption",
+          "unit": "kWh/100",
+          "decimals": 1,
+          "warnThreshold": 20.0,
+          "critThreshold": 26.0,
+          "col": 0,
+          "row": 4,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "est_range",
+          "type": "big_number",
+          "label": "Reichweite",
+          "pid": "est_range",
+          "unit": "km",
+          "decimals": 0,
+          "col": 4,
+          "row": 4,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "voltage_num",
+          "type": "big_number",
+          "label": "HV Spannung",
+          "pid": "hv_voltage",
+          "unit": "V",
+          "decimals": 1,
+          "col": 8,
+          "row": 4,
+          "colSpan": 4,
+          "rowSpan": 2
+        }
+      ]
+    },
+    {
+      "id": "charge",
+      "title": "Laden",
+      "widgets": [
+        {
+          "id": "charge_gauge",
+          "type": "arc_gauge",
+          "label": "Ladeleistung",
+          "pid": "charge_power",
+          "unit": "kW",
+          "decimals": 1,
+          "col": 0,
+          "row": 0,
+          "colSpan": 5,
+          "rowSpan": 4,
+          "min": 0.0,
+          "max": 105.0
+        },
+        {
+          "id": "charge_soc",
+          "type": "battery_bar",
+          "label": "Ladestand",
+          "pid": "soc",
+          "secondaryPid": "battery_temp",
+          "col": 5,
+          "row": 0,
+          "colSpan": 7,
+          "rowSpan": 2
+        },
+        {
+          "id": "charge_spark",
+          "type": "sparkline",
+          "label": "Ladekurve",
+          "pid": "charge_power",
+          "unit": "kW",
+          "col": 5,
+          "row": 2,
+          "colSpan": 7,
+          "rowSpan": 2,
+          "min": 0.0,
+          "max": 105.0
+        },
+        {
+          "id": "charge_voltage",
+          "type": "big_number",
+          "label": "HV Spannung",
+          "pid": "hv_voltage",
+          "unit": "V",
+          "decimals": 1,
+          "col": 0,
+          "row": 4,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "charge_current",
+          "type": "big_number",
+          "label": "HV Strom",
+          "pid": "hv_current",
+          "unit": "A",
+          "decimals": 1,
+          "showSign": true,
+          "col": 4,
+          "row": 4,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "charge_temp",
+          "type": "big_number",
+          "label": "Akkutemp",
+          "pid": "battery_temp",
+          "unit": "°C",
+          "decimals": 0,
+          "warnThreshold": 36.0,
+          "critThreshold": 43.0,
+          "col": 8,
+          "row": 4,
+          "colSpan": 4,
+          "rowSpan": 2
+        }
+      ]
+    },
+    {
+      "id": "battery",
+      "title": "Akku",
+      "widgets": [
+        {
+          "id": "bat_soc",
+          "type": "battery_bar",
+          "label": "HV Akku",
+          "pid": "soc",
+          "secondaryPid": "battery_temp",
+          "col": 0,
+          "row": 0,
+          "colSpan": 6,
+          "rowSpan": 2
+        },
+        {
+          "id": "bat_soh",
+          "type": "big_number",
+          "label": "SoH",
+          "pid": "soh",
+          "unit": "%",
+          "decimals": 1,
+          "col": 6,
+          "row": 0,
+          "colSpan": 3,
+          "rowSpan": 2
+        },
+        {
+          "id": "bat_delta",
+          "type": "big_number",
+          "label": "Zell-Delta",
+          "pid": "cell_delta_mv",
+          "unit": "mV",
+          "decimals": 0,
+          "warnThreshold": 40.0,
+          "critThreshold": 80.0,
+          "col": 9,
+          "row": 0,
+          "colSpan": 3,
+          "rowSpan": 2
+        },
+        {
+          "id": "cell_min",
+          "type": "big_number",
+          "label": "Zelle Min",
+          "pid": "cell_voltage_min",
+          "unit": "V",
+          "decimals": 3,
+          "col": 0,
+          "row": 2,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "cell_max",
+          "type": "big_number",
+          "label": "Zelle Max",
+          "pid": "cell_voltage_max",
+          "unit": "V",
+          "decimals": 3,
+          "col": 4,
+          "row": 2,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "bat_volt",
+          "type": "big_number",
+          "label": "Pack Spannung",
+          "pid": "hv_voltage",
+          "unit": "V",
+          "decimals": 1,
+          "col": 8,
+          "row": 2,
+          "colSpan": 4,
+          "rowSpan": 2
+        },
+        {
+          "id": "cell_array",
+          "type": "sparkline",
+          "label": "108s2p Zellspannungen (ISO-TP)",
+          "pid": "cell_voltages",
+          "unit": "V",
+          "arrayMode": true,
+          "col": 0,
+          "row": 4,
+          "colSpan": 12,
+          "rowSpan": 2,
+          "min": 3.0,
+          "max": 4.2
+        }
+      ]
+    }
+  ]
+}

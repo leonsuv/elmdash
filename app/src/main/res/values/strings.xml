@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Corsa-e Dash</string>
+    <string name="car_action_status">M1 Ready</string>
+    <string name="phone_placeholder_title">Corsa-e Android Auto Dash</string>
+    <string name="phone_placeholder_body">Milestone 1 Skeleton active. Launch Android Auto / DHU to view the live SurfaceCallback canvas.</string>
+</resources>
