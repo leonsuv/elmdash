@@ -87,6 +87,12 @@ object DtcDecoder {
 
             if (b0 == 0 && b1 == 0 && ftb == 0) continue
 
+            // ISO 14229-1 status mask filter: ignore "ghost" monitor entries that only have
+            // bit 4 (0x10 testNotCompletedSinceLastClear) or bit 6 (0x40 testNotCompletedThisOperationCycle)
+            // without any actual fault bit (0x01 testFailed, 0x02 testFailedThisOpCycle, 0x04 pending,
+            // 0x08 confirmed, 0x80 warningIndicatorRequested).
+            if ((status and 0x8F) == 0) continue
+
             val code = formatSaeCode(b0, b1)
             val ftbHex = String.format("%02X", ftb)
             dtcs.add(

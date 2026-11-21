@@ -86,7 +86,7 @@ fun BatteryChecksCard(checks: List<HealthCheckItem>) {
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(chk.title, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = EvColors.TextPrimary, modifier = Modifier.weight(1f))
@@ -94,9 +94,8 @@ fun BatteryChecksCard(checks: List<HealthCheckItem>) {
                             text = chk.valueText,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            color = EvColors.CyanLight,
-                            modifier = Modifier.padding(end = 8.dp)
+                            fontSize = 11.sp,
+                            color = EvColors.CyanLight
                         )
                         Text(
                             text = badgeText,

@@ -67,12 +67,20 @@ class TelemetryRepository(private val maxHistorySamples: Int = 90) {
         if (computed.isEmpty()) return
         val updatedHistory = HashMap<String, List<Double>>()
         synchronized(lock) {
-            // Track sparkline history for instant consumption as well
-            computed[TripTracker.PID_INST_CONSUMPTION]?.let { inst ->
-                val ring = historyRings.getOrPut(TripTracker.PID_INST_CONSUMPTION) { ArrayDeque(maxHistorySamples) }
-                if (ring.size >= maxHistorySamples) ring.removeFirst()
-                ring.addLast(inst)
-                updatedHistory[TripTracker.PID_INST_CONSUMPTION] = ring.toList()
+            // Track sparkline history for computed live gauges/graphs (HV power, charge curve, inst. consumption, DC-DC)
+            val trackedKeys = listOf(
+                TripTracker.PID_HV_POWER,
+                TripTracker.PID_CHARGE_POWER,
+                TripTracker.PID_INST_CONSUMPTION,
+                TripTracker.PID_DCDC_POWER
+            )
+            for (key in trackedKeys) {
+                computed[key]?.let { value ->
+                    val ring = historyRings.getOrPut(key) { ArrayDeque(maxHistorySamples) }
+                    if (ring.size >= maxHistorySamples) ring.removeFirst()
+                    ring.addLast(value)
+                    updatedHistory[key] = ring.toList()
+                }
             }
         }
         _snapshot.update { current ->

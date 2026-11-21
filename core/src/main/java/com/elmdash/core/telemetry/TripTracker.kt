@@ -119,10 +119,10 @@ class TripTracker(private val context: Context) {
     fun onTelemetryTick(values: Map<String, Double>, nowMs: Long = System.currentTimeMillis()): Map<String, Double> {
         val hvVoltage = values["hv_voltage"]
         val hvCurrent = values["hv_current"]
-        val powerKw = values["hv_power"] ?: if (hvVoltage != null && hvCurrent != null) {
+        val powerKw = if (hvVoltage != null && hvCurrent != null) {
             (hvVoltage * hvCurrent) / 1000.0
         } else {
-            null
+            values["hv_power"]
         }
         val speedKmh = values["speed"]
         val soc = values["soc"]
@@ -202,17 +202,13 @@ class TripTracker(private val context: Context) {
         val computed = HashMap<String, Double>(16)
 
         if (powerKw != null) {
-            if ("hv_power" !in values) {
-                computed[PID_HV_POWER] = powerKw
-            }
-            if ("charge_power" !in values) {
-                computed[PID_CHARGE_POWER] = if (powerKw < -0.2) -powerKw else 0.0
-            }
+            computed[PID_HV_POWER] = powerKw
+            computed[PID_CHARGE_POWER] = if (powerKw < -0.2) -powerKw else 0.0
         }
 
         val auxV = values["aux_12v_voltage"]
         val auxA = values["aux_12v_current"]
-        if ("dcdc_power" !in values && auxV != null && auxA != null) {
+        if (auxV != null && auxA != null) {
             computed[PID_DCDC_POWER] = (auxV * auxA) / 1000.0
         }
 

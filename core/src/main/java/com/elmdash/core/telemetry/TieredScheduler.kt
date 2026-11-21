@@ -64,7 +64,9 @@ class TieredScheduler(
             onEcuProgress?.invoke(ecu.name)
             try {
                 session.selectEcu(ecu.txHeader, ecu.rxHeader)
-                val raw = session.sendCommand("1902FF", timeoutMs = 2000L)
+                // Mask 0x0F = testFailed | testFailedThisOpCycle | pendingDTC | confirmedDTC
+                // Excludes bit 4 (0x10) & bit 6 (0x40) "testNotCompleted" ghost monitors!
+                val raw = session.sendCommand("19020F", timeoutMs = 2000L)
                 when (val assembled = IsoTpAssembler.assemble(raw, ecu.rxHeader)) {
                     is IsoTpResult.Success -> {
                         val dtcs = DtcDecoder.decodeUds1902(assembled.payload, ecuKey, ecu.name)
