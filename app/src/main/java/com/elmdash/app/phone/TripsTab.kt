@@ -233,9 +233,10 @@ fun TripsTab() {
                         unit = "kWh entladen",
                         accent = true
                     )
+                    val fullCycles = health.fullCycleEquivalents ?: totalOut?.let { it / 46.3 }
                     TripMetricColumn(
                         label = "VOLLZYKLEN",
-                        value = health.fullCycleEquivalents?.let { String.format(Locale.US, "%.0f", it) } ?: "--",
+                        value = fullCycles?.let { String.format(Locale.US, "%.1f", it) } ?: "--",
                         unit = "Äquiv."
                     )
                 }

@@ -72,6 +72,7 @@ class TelemetryRepository(private val maxHistorySamples: Int = 90) {
                 TripTracker.PID_HV_POWER,
                 TripTracker.PID_CHARGE_POWER,
                 TripTracker.PID_INST_CONSUMPTION,
+                TripTracker.PID_SESSION_CONSUMPTION,
                 TripTracker.PID_DCDC_POWER
             )
             for (key in trackedKeys) {

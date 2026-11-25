@@ -90,6 +90,68 @@ class TripTracker(private val context: Context) {
     @Volatile
     private var lastPersistMs: Long = 0L
 
+    @Volatile
+    private var sessionDistanceKm: Double = 0.0
+    @Volatile
+    private var sessionNetEnergyKwh: Double = 0.0
+
+    @Volatile
+    var onTripValuesChanged: ((Map<String, Double>) -> Unit)? = null
+
+    fun resetSessionDrive() {
+        synchronized(lock) {
+            sessionDistanceKm = 0.0
+            sessionNetEnergyKwh = 0.0
+            lastSampleMs = 0L
+        }
+        emitCurrentTripValues()
+    }
+
+    fun currentTripComputedValues(
+        availableEnergyKwh: Double? = null,
+        soc: Double? = null,
+        soh: Double = 95.0
+    ): Map<String, Double> {
+        val list = synchronized(lock) { _trips.value }
+        val primary = list.firstOrNull { it.isPrimary } ?: list.firstOrNull()
+        val secondary = list.firstOrNull { it.id != primary?.id }
+        val out = HashMap<String, Double>(12)
+        if (primary != null) {
+            out[PID_TRIP_DISTANCE] = primary.recordedDistanceKm
+            out[PID_TRIP_ENERGY] = primary.netEnergyKwh
+            out[PID_TRIP_REGEN] = primary.regenEnergyKwh
+            out[PID_TRIP_CONSUMPTION] = primary.consumptionKwhPer100Km
+            out[PID_TRIP_AVG_SPEED] = primary.avgSpeedKmh
+        }
+        if (secondary != null) {
+            out[PID_LAST_TRIP_CONSUMPTION] = secondary.consumptionKwhPer100Km
+            out[PID_LAST_TRIP_KWH] = secondary.netEnergyKwh
+            out[PID_LAST_TRIP_KM] = secondary.recordedDistanceKm
+        }
+        val sessDist = sessionDistanceKm
+        val sessKwh = sessionNetEnergyKwh
+        out[PID_SESSION_DISTANCE] = sessDist
+        out[PID_SESSION_ENERGY] = sessKwh
+        out[PID_SESSION_CONSUMPTION] = if (sessDist >= 0.05) {
+            (sessKwh / sessDist * 100.0).coerceIn(-30.0, 99.9)
+        } else 0.0
+
+        val remainingKwh = availableEnergyKwh ?: soc?.let { 46.3 * (soh / 100.0) * (it / 100.0) }
+        if (remainingKwh != null) {
+            val effCons = if (primary != null && primary.recordedDistanceKm >= 0.5 && primary.consumptionKwhPer100Km in 8.0..38.0) {
+                primary.consumptionKwhPer100Km
+            } else {
+                16.2
+            }
+            out[PID_EST_RANGE] = (remainingKwh / effCons * 100.0).coerceIn(0.0, 500.0)
+        }
+        return out
+    }
+
+    private fun emitCurrentTripValues() {
+        onTripValuesChanged?.invoke(currentTripComputedValues())
+    }
+
     suspend fun loadInitial() {
         val raw = context.tripDataStore.data.first()[KEY_TRIPS_JSON]
         if (!raw.isNullOrBlank()) {
@@ -100,6 +162,7 @@ class TripTracker(private val context: Context) {
                 }
             }
         }
+        emitCurrentTripValues()
     }
 
     suspend fun persistNow() {
@@ -165,6 +228,9 @@ class TripTracker(private val context: Context) {
                 val isCharging = (speedKmh ?: 0.0) < 0.5 && (powerKw ?: 0.0) < -3.0
                 val dNetKwh = if (powerKw != null && !isCharging) powerKw * (dtSec / 3600.0) else 0.0
                 val dRegenKwh = if (powerKw != null && !isCharging && powerKw < 0.0) (-powerKw) * (dtSec / 3600.0) else 0.0
+
+                sessionDistanceKm += dKm
+                sessionNetEnergyKwh += dNetKwh
 
                 val next = _trips.value.map { trip ->
                     val boundVehicleId = trip.vehicleId.ifBlank { cleanVehicleId }
@@ -239,11 +305,19 @@ class TripTracker(private val context: Context) {
         }
 
         if (powerKw != null && speedKmh != null) {
-            computed[PID_INST_CONSUMPTION] = if (speedKmh >= 3.0) {
-                (powerKw / speedKmh * 100.0).coerceIn(-50.0, 80.0)
+            computed[PID_INST_CONSUMPTION] = if (speedKmh >= 2.0) {
+                (powerKw / speedKmh * 100.0).coerceIn(-50.0, 99.9)
             } else {
                 0.0
             }
+        }
+
+        computed[PID_SESSION_DISTANCE] = sessionDistanceKm
+        computed[PID_SESSION_ENERGY] = sessionNetEnergyKwh
+        computed[PID_SESSION_CONSUMPTION] = if (sessionDistanceKm >= 0.05) {
+            (sessionNetEnergyKwh / sessionDistanceKm * 100.0).coerceIn(-30.0, 99.9)
+        } else {
+            0.0
         }
 
         if (primary != null) {
@@ -301,6 +375,7 @@ class TripTracker(private val context: Context) {
             _trips.value = listOf(newTrip) + base
         }
         persistNow()
+        emitCurrentTripValues()
     }
 
     suspend fun toggleRunning(tripId: String) {
@@ -310,6 +385,7 @@ class TripTracker(private val context: Context) {
             }
         }
         persistNow()
+        emitCurrentTripValues()
     }
 
     suspend fun setPrimary(tripId: String) {
@@ -317,6 +393,7 @@ class TripTracker(private val context: Context) {
             _trips.value = _trips.value.map { it.copy(isPrimary = it.id == tripId) }
         }
         persistNow()
+        emitCurrentTripValues()
     }
 
     suspend fun resetTrip(tripId: String) {
@@ -336,6 +413,7 @@ class TripTracker(private val context: Context) {
             }
         }
         persistNow()
+        emitCurrentTripValues()
     }
 
     suspend fun deleteTrip(tripId: String) {
@@ -350,6 +428,7 @@ class TripTracker(private val context: Context) {
             }
         }
         persistNow()
+        emitCurrentTripValues()
     }
 
     companion object {
@@ -359,6 +438,9 @@ class TripTracker(private val context: Context) {
         const val PID_CHARGE_POWER = "charge_power"
         const val PID_DCDC_POWER = "dcdc_power"
         const val PID_INST_CONSUMPTION = "inst_consumption"
+        const val PID_SESSION_CONSUMPTION = "session_consumption"
+        const val PID_SESSION_DISTANCE = "session_distance"
+        const val PID_SESSION_ENERGY = "session_energy"
         const val PID_TRIP_CONSUMPTION = "trip_consumption"
         const val PID_TRIP_DISTANCE = "trip_distance"
         const val PID_TRIP_ENERGY = "trip_energy"
@@ -376,7 +458,10 @@ class TripTracker(private val context: Context) {
             Triple(PID_HV_POWER, "Leistung BMS (V × A)", "kW"),
             Triple(PID_CHARGE_POWER, "Ladeleistung (BMS)", "kW"),
             Triple(PID_DCDC_POWER, "DC-DC 12V Leistung", "kW"),
-            Triple(PID_INST_CONSUMPTION, "Momentanverbrauch", "kWh/100km"),
+            Triple(PID_INST_CONSUMPTION, "Momentanverbrauch (kW / km/h × 100)", "kWh/100km"),
+            Triple(PID_SESSION_CONSUMPTION, "Aktuelle Fahrt Ø Verbrauch", "kWh/100km"),
+            Triple(PID_SESSION_DISTANCE, "Aktuelle Fahrt Distanz", "km"),
+            Triple(PID_SESSION_ENERGY, "Aktuelle Fahrt Energie", "kWh"),
             Triple(PID_TRIP_CONSUMPTION, "Trip Ø Verbrauch", "kWh/100km"),
             Triple(PID_TRIP_DISTANCE, "Trip Distanz", "km"),
             Triple(PID_TRIP_ENERGY, "Trip Energie", "kWh"),

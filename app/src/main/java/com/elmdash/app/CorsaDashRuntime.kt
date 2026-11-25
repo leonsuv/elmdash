@@ -96,7 +96,17 @@ object CorsaDashRuntime {
             preferences = ObdPreferences(appContext)
             cache = TelemetryCache(appContext)
             layoutStore = DashboardLayoutStore(appContext)
-            tripTracker = TripTracker(appContext)
+            tripTracker = TripTracker(appContext).apply {
+                onTripValuesChanged = { tripVals ->
+                    val snap = repository.snapshot.value
+                    val merged = currentTripComputedValues(
+                        availableEnergyKwh = snap.getValue("available_energy"),
+                        soc = snap.getValue("soc"),
+                        soh = snap.getValue("soh") ?: 95.0
+                    )
+                    repository.mergeComputedValues(merged)
+                }
+            }
             batteryHealth = BatteryHealthAnalyzer()
             csvRecorder = TelemetryCsvRecorder(appContext)
 
@@ -108,9 +118,16 @@ object CorsaDashRuntime {
                 repository = repository,
                 rawLog = rawLog,
                 onValuesUpdated = { values ->
-                    // Never overwrite real-car cache with Demo / Simulator values!
+                    // Never overwrite real-car cache with Demo / Simulator values or volatile trip/instant values!
                     if (!_isSimulatedSession.value) {
-                        appScope.launch { cache.save(values) }
+                        val persistable = values.filterKeys { k ->
+                            !k.startsWith("trip_") &&
+                                !k.startsWith("last_trip_") &&
+                                !k.startsWith("session_") &&
+                                k != TripTracker.PID_INST_CONSUMPTION &&
+                                k != TripTracker.PID_EST_RANGE
+                        }
+                        appScope.launch { cache.save(persistable) }
                     }
                 },
                 onPollCycle = { values ->
@@ -158,12 +175,20 @@ object CorsaDashRuntime {
 
             // Load trip history & cached telemetry for Zero-Blank-UI
             appScope.launch {
-                tripTracker.loadInitial()
                 val cached = cache.load()
                 if (cached.isNotEmpty()) {
-                    repository.loadCachedValues(cached)
-                    rawLog.append(ObdRawLogEntry.Direction.INFO, "Loaded ${cached.size} cached PID values")
+                    val cleanCached = cached.filterKeys { k ->
+                        !k.startsWith("trip_") &&
+                            !k.startsWith("last_trip_") &&
+                            !k.startsWith("session_") &&
+                            k != TripTracker.PID_INST_CONSUMPTION &&
+                            k != TripTracker.PID_EST_RANGE
+                    }
+                    repository.loadCachedValues(cleanCached)
+                    batteryHealth.onSnapshot(repository.snapshot.value)
+                    rawLog.append(ObdRawLogEntry.Direction.INFO, "Loaded ${cleanCached.size} cached PID values")
                 }
+                tripTracker.loadInitial()
             }
 
             initialized = true
@@ -185,7 +210,7 @@ object CorsaDashRuntime {
                     _activeVehicleId.value = userVin
                 }
             }
-            tripTracker.resetSampleClock()
+            tripTracker.resetSessionDrive()
             scheduler.start(appScope) { createTransport(settings) }
         }
     }
