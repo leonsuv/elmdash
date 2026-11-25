@@ -35,7 +35,7 @@ class BigNumberWidget(
         val padX = (bounds.width() * 0.075f).coerceIn(10f, 20f)
         val padY = (bounds.height() * 0.13f).coerceIn(8f, 16f)
 
-        val rawValue = state.getValue(pid)
+        val rawValue = state.getValue(pid) ?: state.getArray(pid)?.takeIf { it.isNotEmpty() }?.average()
         val accentColor = when {
             rawValue == null -> theme.cardBorder
             critThreshold != null && rawValue >= critThreshold -> theme.criticalRed
@@ -72,8 +72,26 @@ class BigNumberWidget(
         val formatted = if (rawValue == null) {
             "--"
         } else {
-            val pattern = if (showSign) "%+.${decimals}f" else "%.${decimals}f"
-            String.format(Locale.US, pattern, rawValue)
+            when (pid) {
+                "drive_mode" -> when (rawValue.toInt()) {
+                    2 -> "SPORT"
+                    6 -> "NORMAL"
+                    7 -> "ECO"
+                    else -> rawValue.toInt().toString()
+                }
+                "gear_selector" -> when (rawValue.toInt()) {
+                    0 -> "P"
+                    1 -> "R"
+                    2 -> "N"
+                    3 -> "D"
+                    else -> rawValue.toInt().toString()
+                }
+                "charge_cable_state" -> if (rawValue >= 0.5) "KABEL" else "FREI"
+                else -> {
+                    val pattern = if (showSign) "%+.${decimals}f" else "%.${decimals}f"
+                    String.format(Locale.US, pattern, rawValue)
+                }
+            }
         }
 
         val valueColor = when {

@@ -60,6 +60,8 @@ fun TripsTab() {
     val snapshot by CorsaDashRuntime.repository.snapshot.collectAsState()
     val settings by CorsaDashRuntime.preferences.settingsFlow.collectAsState(initial = ObdSettings())
     val health by CorsaDashRuntime.batteryHealth.state.collectAsState()
+    val isSimulated by CorsaDashRuntime.isSimulatedSession.collectAsState()
+    val activeVehicleId by CorsaDashRuntime.activeVehicleId.collectAsState()
     val priceEur = settings.electricityPriceEurPerKwh
 
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -92,6 +94,44 @@ fun TripsTab() {
             Button(onClick = { showCreateDialog = true }) {
                 Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Text(" Trip")
+            }
+        }
+
+        if (isSimulated) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(EvColors.Amber.copy(alpha = 0.16f))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Rounded.Warning, contentDescription = null, tint = EvColors.Amber, modifier = Modifier.size(18.dp))
+                Text(
+                    text = "Demo-/Simulator-Modus aktiv — echte Fahrzeug-Trips werden nicht verändert.",
+                    fontSize = 11.sp,
+                    color = EvColors.Amber
+                )
+            }
+        } else if (!activeVehicleId.isNullOrBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(EvColors.Emerald.copy(alpha = 0.12f))
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Aktives Fahrzeug (VIN / BMS-ID)", fontSize = 11.sp, color = EvColors.TextSecondary)
+                Text(
+                    text = activeVehicleId!!,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp,
+                    color = EvColors.Emerald
+                )
             }
         }
 
@@ -237,7 +277,13 @@ fun TripsTab() {
                 Button(onClick = {
                     val clean = name
                     showCreateDialog = false
-                    scope.launch { CorsaDashRuntime.tripTracker.createTrip(clean, makePrimary = false) }
+                    scope.launch {
+                        CorsaDashRuntime.tripTracker.createTrip(
+                            name = clean,
+                            makePrimary = false,
+                            vehicleId = activeVehicleId.orEmpty()
+                        )
+                    }
                 }) {
                     Text("Starten")
                 }
@@ -298,7 +344,11 @@ private fun TripCard(
                         )
                     }
                     Text(
-                        text = "Seit $startedLabel" + if (trip.isPrimary) " • Dashboard-Trip" else "",
+                        text = buildString {
+                            append("Seit $startedLabel")
+                            if (trip.isPrimary) append(" • Dashboard-Trip")
+                            if (trip.vehicleId.isNotBlank()) append(" • ${trip.vehicleId}")
+                        },
                         fontSize = 11.sp,
                         color = EvColors.TextSecondary
                     )

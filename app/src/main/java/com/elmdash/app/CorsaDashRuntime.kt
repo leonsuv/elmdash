@@ -72,6 +72,12 @@ object CorsaDashRuntime {
     private val _lastDtcReports = MutableStateFlow<List<EcuDiagnosticReport>>(emptyList())
     val lastDtcReports: StateFlow<List<EcuDiagnosticReport>> = _lastDtcReports.asStateFlow()
 
+    private val _isSimulatedSession = MutableStateFlow(false)
+    val isSimulatedSession: StateFlow<Boolean> = _isSimulatedSession.asStateFlow()
+
+    private val _activeVehicleId = MutableStateFlow<String?>(null)
+    val activeVehicleId: StateFlow<String?> = _activeVehicleId.asStateFlow()
+
     private var bmsMetaRequested = false
     private lateinit var appContext: Context
 
@@ -102,10 +108,18 @@ object CorsaDashRuntime {
                 repository = repository,
                 rawLog = rawLog,
                 onValuesUpdated = { values ->
-                    appScope.launch { cache.save(values) }
+                    // Never overwrite real-car cache with Demo / Simulator values!
+                    if (!_isSimulatedSession.value) {
+                        appScope.launch { cache.save(values) }
+                    }
                 },
                 onPollCycle = { values ->
-                    val computed = tripTracker.onTelemetryTick(values)
+                    val isRealCar = !_isSimulatedSession.value
+                    val computed = tripTracker.onTelemetryTick(
+                        values = values,
+                        allowTripIntegration = isRealCar,
+                        vehicleId = _activeVehicleId.value
+                    )
                     repository.mergeComputedValues(computed)
                     val snap = repository.snapshot.value
                     batteryHealth.onSnapshot(snap)
@@ -116,10 +130,20 @@ object CorsaDashRuntime {
                             runCatching {
                                 val meta = scheduler.readBmsMetadata()
                                 batteryHealth.updateBmsMetadata(meta)
+                                if (isRealCar) {
+                                    val userVin = preferences.getSettings().reportVinOrNote
+                                        .trim().uppercase().takeIf { it.length >= 6 }
+                                    val resolvedId = meta.vin
+                                        ?: userVin
+                                        ?: meta.serialNumber?.let { "BMS-$it" }
+                                    if (!resolvedId.isNullOrBlank()) {
+                                        _activeVehicleId.value = resolvedId
+                                    }
+                                }
                             }
                         }
                     }
-                    if (tripTracker.shouldAutoPersist()) {
+                    if (isRealCar && tripTracker.shouldAutoPersist()) {
                         appScope.launch { tripTracker.persistNow() }
                     }
                 }
@@ -151,6 +175,17 @@ object CorsaDashRuntime {
         if (scheduler.isRunning) return
         appScope.launch {
             val settings = preferences.getSettings()
+            val simulated = settings.transportMode == TransportMode.DEMO || settings.transportMode == TransportMode.TCP
+            _isSimulatedSession.value = simulated
+            if (simulated) {
+                _activeVehicleId.value = null
+            } else {
+                val userVin = settings.reportVinOrNote.trim().uppercase().takeIf { it.length >= 6 }
+                if (userVin != null && _activeVehicleId.value == null) {
+                    _activeVehicleId.value = userVin
+                }
+            }
+            tripTracker.resetSampleClock()
             scheduler.start(appScope) { createTransport(settings) }
         }
     }
@@ -158,6 +193,7 @@ object CorsaDashRuntime {
     fun restartPolling(context: Context) {
         ensureInitialized(context)
         bmsMetaRequested = false
+        tripTracker.resetSampleClock()
         scheduler.stop()
         startPolling(context)
     }
@@ -165,6 +201,7 @@ object CorsaDashRuntime {
     fun stopPolling() {
         if (!initialized) return
         bmsMetaRequested = false
+        tripTracker.resetSampleClock()
         scheduler.stop()
         rawLog.append(ObdRawLogEntry.Direction.INFO, "Polling stopped (12V battery protection)")
     }

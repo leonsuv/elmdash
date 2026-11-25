@@ -250,9 +250,10 @@ class ArcGaugeWidget(
         unitPaint.color = theme.textSecondary
         canvas.drawText(unit, cx, cy + valuePaint.textSize * 0.16f + unitPaint.textSize * 1.45f, unitPaint)
 
-        // Bottom mode pill (REKU / ECO / POWER / CHARGE)
+        // Bottom mode pill (REKU / ECO / POWER / LADEN)
         val modeText = when {
             rawValue == null -> "STANDBY"
+            pid == "charge_power" && rawValue > 0.2 -> "LADEN"
             isBipolar && rawValue < -1.0 -> "REKUPERATION"
             isBipolar && rawValue > max * 0.72 -> "BOOST"
             isBipolar -> "ECO DRIVE"

@@ -68,7 +68,8 @@ class SparklineWidget(
         labelPaint.color = theme.textSecondary
         canvas.drawText(label.uppercase(Locale.US), bounds.left + padX, bounds.top + padY + headerSize * 0.82f, labelPaint)
 
-        val samples = if (arrayMode) {
+        val isArray = arrayMode || state.getArray(pid) != null || pid in ARRAY_PIDS
+        val samples = if (isArray) {
             state.getArray(pid).orEmpty()
         } else {
             state.getHistory(pid)
@@ -79,9 +80,15 @@ class SparklineWidget(
         WidgetCardDrawer.applyStaleAlpha(metaPaint, state.isStale, theme)
         val metaText = if (samples.isEmpty()) {
             "--"
-        } else if (arrayMode) {
-            val spreadMv = (samples.max() - samples.min()) * 1000.0
-            String.format(Locale.US, "%d cells • Δ%.0f mV", samples.size, spreadMv)
+        } else if (isArray) {
+            when (pid) {
+                "cell_soh" -> String.format(Locale.US, "%d cells • Min %.1f%%", samples.size, samples.min())
+                "temp_probes" -> String.format(Locale.US, "%d Fühler • %.0f–%.0f °C", samples.size, samples.min(), samples.max())
+                else -> {
+                    val spreadMv = (samples.max() - samples.min()) * 1000.0
+                    String.format(Locale.US, "%d cells • Δ%.0f mV", samples.size, spreadMv)
+                }
+            }
         } else {
             String.format(Locale.US, "%+.1f %s", samples.last(), unit)
         }
@@ -105,18 +112,18 @@ class SparklineWidget(
 
         val dataMin = samples.min()
         val dataMax = samples.max()
-        val autoPad = ((dataMax - dataMin) * 0.12).coerceAtLeast(if (arrayMode) 0.015 else 1.0)
+        val autoPad = ((dataMax - dataMin) * 0.12).coerceAtLeast(if (isArray) 0.015 else 1.0)
         val yMin = when {
-            arrayMode || autoScale -> dataMin - autoPad
+            isArray || autoScale -> dataMin - autoPad
             else -> minOf(minHint, dataMin)
         }
         val yMax = when {
-            arrayMode || autoScale -> dataMax + autoPad
+            isArray || autoScale -> dataMax + autoPad
             else -> maxOf(maxHint, dataMax)
         }
         val yRange = (yMax - yMin).coerceAtLeast(1e-3)
 
-        if (arrayMode) {
+        if (isArray) {
             val count = samples.size
             val gap = if (count > 48) 1.5f else (plotW * 0.01f).coerceIn(2f, 5f)
             val barW = ((plotW - gap * (count - 1)) / count).coerceAtLeast(1.5f)
@@ -199,5 +206,9 @@ class SparklineWidget(
         dotPaint.color = baseColor
         WidgetCardDrawer.applyStaleAlpha(dotPaint, state.isStale, theme)
         canvas.drawCircle(lastX, lastY, 4.5f, dotPaint)
+    }
+
+    companion object {
+        private val ARRAY_PIDS = setOf("cell_voltages", "cell_soh", "temp_probes")
     }
 }

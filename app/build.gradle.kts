@@ -15,14 +15,14 @@ val keystoreProps = Properties().apply {
 
 android {
     namespace = "com.elmdash.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.elmdash.app"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 6
-        versionName = "1.2.3"
+        targetSdk = 36
+        versionCode = 8
+        versionName = "1.2.4"
     }
 
     buildFeatures {

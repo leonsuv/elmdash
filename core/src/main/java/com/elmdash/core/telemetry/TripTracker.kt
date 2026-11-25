@@ -35,7 +35,8 @@ data class TrackedTrip(
     val lastOdometerKm: Double? = null,
     val startSoc: Double? = null,
     val lastSoc: Double? = null,
-    val distanceSinceLastOdoKm: Double = 0.0
+    val distanceSinceLastOdoKm: Double = 0.0,
+    val vehicleId: String = ""
 ) {
     val totalDistanceKm: Double
         get() = recordedDistanceKm + missedGapKm
@@ -112,11 +113,25 @@ class TripTracker(private val context: Context) {
     fun shouldAutoPersist(nowMs: Long = System.currentTimeMillis()): Boolean =
         nowMs - lastPersistMs >= 10_000L
 
+    fun resetSampleClock() {
+        synchronized(lock) {
+            lastSampleMs = 0L
+        }
+    }
+
     /**
-     * Integrates live telemetry into ALL running trips concurrently, detects odometer data gaps,
-     * and returns virtual PID values for the primary trip + instant EV metrics.
+     * Integrates live telemetry into ALL running trips concurrently (ONLY for real-vehicle sessions
+     * matching [vehicleId]), detects odometer data gaps, and returns virtual PID values for the
+     * primary trip + instant EV metrics.
+     *
+     * When [allowTripIntegration] is false (Demo Car / TCP Simulator), real trips are never touched.
      */
-    fun onTelemetryTick(values: Map<String, Double>, nowMs: Long = System.currentTimeMillis()): Map<String, Double> {
+    fun onTelemetryTick(
+        values: Map<String, Double>,
+        nowMs: Long = System.currentTimeMillis(),
+        allowTripIntegration: Boolean = true,
+        vehicleId: String? = null
+    ): Map<String, Double> {
         val hvVoltage = values["hv_voltage"]
         val hvCurrent = values["hv_current"]
         val powerKw = if (hvVoltage != null && hvCurrent != null) {
@@ -131,69 +146,80 @@ class TripTracker(private val context: Context) {
         val odometerKm = values["odometer"]
         val cellMin = values["cell_voltage_min"]
         val cellMax = values["cell_voltage_max"]
+        val cleanVehicleId = vehicleId?.trim()?.uppercase().orEmpty()
 
         val updatedList = synchronized(lock) {
-            val dtSec = if (lastSampleMs > 0L) {
-                ((nowMs - lastSampleMs) / 1000.0).coerceIn(0.0, 5.0)
+            if (!allowTripIntegration) {
+                // Demo / Simulator mode: NEVER modify or contaminate real-car trips!
+                _trips.value
             } else {
-                0.0
-            }
-            lastSampleMs = nowMs
-
-            val dKm = if (speedKmh != null && speedKmh > 0.5) speedKmh * (dtSec / 3600.0) else 0.0
-            val dMoving = if (speedKmh != null && speedKmh > 1.0) dtSec else 0.0
-            val isCharging = (speedKmh ?: 0.0) < 0.5 && (powerKw ?: 0.0) < -3.0
-            val dNetKwh = if (powerKw != null && !isCharging) powerKw * (dtSec / 3600.0) else 0.0
-            val dRegenKwh = if (powerKw != null && !isCharging && powerKw < 0.0) (-powerKw) * (dtSec / 3600.0) else 0.0
-
-            val next = _trips.value.map { trip ->
-                if (!trip.isRunning) {
-                    trip
+                val dtSec = if (lastSampleMs > 0L) {
+                    ((nowMs - lastSampleMs) / 1000.0).coerceIn(0.0, 5.0)
                 } else {
-                    var missedKm = trip.missedGapKm
-                    var gaps = trip.gapCount
-                    var distSinceOdo = trip.distanceSinceLastOdoKm + dKm
-                    var newLastOdo = trip.lastOdometerKm
-
-                    // Odometer data-gap detection: if car odometer jumped > 1.0 km ahead of recorded distance
-                    if (odometerKm != null && odometerKm > 0.0) {
-                        val prevOdo = trip.lastOdometerKm
-                        if (prevOdo != null) {
-                            val odoDelta = odometerKm - prevOdo
-                            val unrecorded = odoDelta - distSinceOdo
-                            if (odoDelta > 0.0 && unrecorded > 1.2) {
-                                missedKm += unrecorded
-                                gaps += 1
-                                distSinceOdo = 0.0
-                                newLastOdo = odometerKm
-                            } else if (odoDelta >= 1.0) {
-                                distSinceOdo = (distSinceOdo - odoDelta).coerceAtLeast(0.0)
-                                newLastOdo = odometerKm
-                            }
-                        } else {
-                            newLastOdo = odometerKm
-                            distSinceOdo = 0.0
-                        }
-                    }
-
-                    trip.copy(
-                        updatedAtMs = nowMs,
-                        recordedDistanceKm = trip.recordedDistanceKm + dKm,
-                        missedGapKm = missedKm,
-                        gapCount = gaps,
-                        netEnergyKwh = trip.netEnergyKwh + dNetKwh,
-                        regenEnergyKwh = trip.regenEnergyKwh + dRegenKwh,
-                        movingSeconds = trip.movingSeconds + dMoving,
-                        startOdometerKm = trip.startOdometerKm ?: odometerKm,
-                        lastOdometerKm = newLastOdo,
-                        startSoc = trip.startSoc ?: soc,
-                        lastSoc = soc ?: trip.lastSoc,
-                        distanceSinceLastOdoKm = distSinceOdo
-                    )
+                    0.0
                 }
+                lastSampleMs = nowMs
+
+                val dKm = if (speedKmh != null && speedKmh > 0.5) speedKmh * (dtSec / 3600.0) else 0.0
+                val dMoving = if (speedKmh != null && speedKmh > 1.0) dtSec else 0.0
+                val isCharging = (speedKmh ?: 0.0) < 0.5 && (powerKw ?: 0.0) < -3.0
+                val dNetKwh = if (powerKw != null && !isCharging) powerKw * (dtSec / 3600.0) else 0.0
+                val dRegenKwh = if (powerKw != null && !isCharging && powerKw < 0.0) (-powerKw) * (dtSec / 3600.0) else 0.0
+
+                val next = _trips.value.map { trip ->
+                    val boundVehicleId = trip.vehicleId.ifBlank { cleanVehicleId }
+                    val matchesVehicle = boundVehicleId.isEmpty() || cleanVehicleId.isEmpty() ||
+                        boundVehicleId.equals(cleanVehicleId, ignoreCase = true)
+
+                    if (!trip.isRunning || !matchesVehicle) {
+                        trip
+                    } else {
+                        var missedKm = trip.missedGapKm
+                        var gaps = trip.gapCount
+                        var distSinceOdo = trip.distanceSinceLastOdoKm + dKm
+                        var newLastOdo = trip.lastOdometerKm
+
+                        // Odometer data-gap detection: if car odometer jumped > 1.2 km ahead of recorded distance
+                        if (odometerKm != null && odometerKm > 0.0) {
+                            val prevOdo = trip.lastOdometerKm
+                            if (prevOdo != null) {
+                                val odoDelta = odometerKm - prevOdo
+                                val unrecorded = odoDelta - distSinceOdo
+                                if (odoDelta > 0.0 && unrecorded > 1.2) {
+                                    missedKm += unrecorded
+                                    gaps += 1
+                                    distSinceOdo = 0.0
+                                    newLastOdo = odometerKm
+                                } else if (odoDelta >= 1.0) {
+                                    distSinceOdo = (distSinceOdo - odoDelta).coerceAtLeast(0.0)
+                                    newLastOdo = odometerKm
+                                }
+                            } else {
+                                newLastOdo = odometerKm
+                                distSinceOdo = 0.0
+                            }
+                        }
+
+                        trip.copy(
+                            updatedAtMs = nowMs,
+                            recordedDistanceKm = trip.recordedDistanceKm + dKm,
+                            missedGapKm = missedKm,
+                            gapCount = gaps,
+                            netEnergyKwh = trip.netEnergyKwh + dNetKwh,
+                            regenEnergyKwh = trip.regenEnergyKwh + dRegenKwh,
+                            movingSeconds = trip.movingSeconds + dMoving,
+                            startOdometerKm = trip.startOdometerKm ?: odometerKm,
+                            lastOdometerKm = newLastOdo,
+                            startSoc = trip.startSoc ?: soc,
+                            lastSoc = soc ?: trip.lastSoc,
+                            distanceSinceLastOdoKm = distSinceOdo,
+                            vehicleId = boundVehicleId
+                        )
+                    }
+                }
+                _trips.value = next
+                next
             }
-            _trips.value = next
-            next
         }
 
         val primary = updatedList.firstOrNull { it.isPrimary } ?: updatedList.firstOrNull()
@@ -261,14 +287,15 @@ class TripTracker(private val context: Context) {
         return computed
     }
 
-    suspend fun createTrip(name: String, makePrimary: Boolean = false) {
+    suspend fun createTrip(name: String, makePrimary: Boolean = false, vehicleId: String = "") {
         synchronized(lock) {
             val clean = name.trim().ifEmpty { "Trip #${_trips.value.size + 1}" }
             val newTrip = TrackedTrip(
                 id = "trip_${System.currentTimeMillis()}",
                 name = clean,
                 isRunning = true,
-                isPrimary = makePrimary
+                isPrimary = makePrimary,
+                vehicleId = vehicleId.trim().uppercase()
             )
             val base = if (makePrimary) _trips.value.map { it.copy(isPrimary = false) } else _trips.value
             _trips.value = listOf(newTrip) + base
@@ -300,7 +327,8 @@ class TripTracker(private val context: Context) {
                         id = it.id,
                         name = it.name,
                         isRunning = true,
-                        isPrimary = it.isPrimary
+                        isPrimary = it.isPrimary,
+                        vehicleId = it.vehicleId
                     )
                 } else {
                     it

@@ -33,6 +33,8 @@ data class BmsMetadata(
     val manufactureDate: String? = null, // YYYY-MM-DD from 0xF18B
     val hardwareVersion: String? = null, // ASCII from 0xF193
     val softwareVersion: String? = null, // ASCII from 0xF195
+    val serialNumber: String? = null,    // ASCII/Hex from 0xF18C (unique per physical car!)
+    val vin: String? = null,             // ASCII from 0xF190 if exposed by ECU
     val readAtMs: Long = 0L
 )
 

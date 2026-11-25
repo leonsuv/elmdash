@@ -148,6 +148,8 @@ class TieredScheduler(
         var mfgDate: String? = null
         var hwVer: String? = null
         var swVer: String? = null
+        var serialNum: String? = null
+        var vin: String? = null
 
         runCatching {
             val raw = session.sendCommand("22F18B", timeoutMs = 1500L)
@@ -177,10 +179,34 @@ class TieredScheduler(
                     .filter { it in ' '..'~' }.trim().ifEmpty { null }
             }
         }
+        runCatching {
+            val raw = session.sendCommand("22F18C", timeoutMs = 1800L)
+            val res = IsoTpAssembler.assemble(raw, bms.rxHeader)
+            if (res is IsoTpResult.Success && res.payload.size > 3 && (res.payload[0].toInt() and 0xFF) == 0x62) {
+                val data = res.payload.copyOfRange(3, res.payload.size)
+                val ascii = String(data, Charsets.US_ASCII).filter { it.isLetterOrDigit() || it == '-' || it == '_' }.trim()
+                serialNum = if (ascii.length >= 4) {
+                    ascii
+                } else {
+                    data.joinToString("") { "%02X".format(it.toInt() and 0xFF) }.ifEmpty { null }
+                }
+            }
+        }
+        runCatching {
+            val raw = session.sendCommand("22F190", timeoutMs = 1800L)
+            val res = IsoTpAssembler.assemble(raw, bms.rxHeader)
+            if (res is IsoTpResult.Success && res.payload.size >= 20 && (res.payload[0].toInt() and 0xFF) == 0x62) {
+                val candidate = String(res.payload.copyOfRange(3, res.payload.size), Charsets.US_ASCII)
+                    .filter { it.isLetterOrDigit() }.trim()
+                if (candidate.length == 17) vin = candidate
+            }
+        }
         return BmsMetadata(
             manufactureDate = mfgDate,
             hardwareVersion = hwVer,
             softwareVersion = swVer,
+            serialNumber = serialNum,
+            vin = vin,
             readAtMs = System.currentTimeMillis()
         )
     }
@@ -335,7 +361,7 @@ class TieredScheduler(
                 for (pid in pids) {
                     val cmd = pid.buildRequestCommand()
                     val isMultiFrame = pid.expectedFrames == 0 || pid.valueType == ValueType.ARRAY
-                    val cmdTimeoutMs = if (isMultiFrame) 4500L else 1800L
+                    val cmdTimeoutMs = if (isMultiFrame) 5500L else 1800L
 
                     val raw = try {
                         val resp = session.sendCommand(cmd, timeoutMs = cmdTimeoutMs)
@@ -404,9 +430,11 @@ class TieredScheduler(
                         is IsoTpResult.Error -> {
                             val misses = (pidMissCounts[pid.id] ?: 0) + 1
                             pidMissCounts[pid.id] = misses
-                            if (misses >= 3) {
-                                // Back off sleeping ECU / unsupported PID for 60 s
-                                pidCooldownUntilMs[pid.id] = System.currentTimeMillis() + 60_000L
+                            val missLimit = if (isMultiFrame) 5 else 3
+                            val cooldownMs = if (isMultiFrame) 30_000L else 60_000L
+                            if (misses >= missLimit) {
+                                // Back off sleeping ECU / unsupported PID instead of spamming the bus
+                                pidCooldownUntilMs[pid.id] = System.currentTimeMillis() + cooldownMs
                             }
                             rawLog?.append(
                                 ObdRawLogEntry.Direction.ERROR,
